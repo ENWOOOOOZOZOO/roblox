@@ -1,0 +1,3 @@
+return {
+	GameName = "stonejump",
+}
