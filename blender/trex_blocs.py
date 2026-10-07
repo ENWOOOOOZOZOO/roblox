@@ -196,7 +196,7 @@ def toucher(obj, origine, direction):
 nettoyer()
 
 # ---------- tete : profil decoupe, large a l'arriere, museau plus etroit ----------
-LARGEUR_TETE = 1.9
+LARGEUR_TETE = 2.35
 
 
 def effile_tete(y):
@@ -212,10 +212,10 @@ tete = profil("Tete", [
 ligne_bas = [(-4.95, 3.62), (-4.4, 3.44), (-3.7, 3.4), (-3.0, 3.48), (-2.5, 3.72)]
 machoire = profil("Machoire", ligne_bas[::-1] + [
     (-5.12, 3.4), (-5.02, 3.12), (-4.55, 2.86), (-3.85, 2.72), (-3.1, 2.78), (-2.45, 3.08), (-2.15, 3.55),
-][::-1][::-1], 1.75, "Peau", biseau=0.1, effile=effile_tete)
+][::-1][::-1], 2.15, "Peau", biseau=0.1, effile=effile_tete)
 
 # interieur rouge de la bouche
-boite("Bouche", (0, -3.7, 3.55), (1.25, 2.6, 0.42), "Bouche", biseau=0.05)
+boite("Bouche", (0, -3.7, 3.55), (1.65, 2.6, 0.42), "Bouche", biseau=0.05)
 
 
 # ---------- dents serrees ----------
@@ -234,7 +234,7 @@ def rangee_dents(ligne, sens, largeur, longueur, rayon, decalage=0.0):
 
 
 rangee_dents(ligne_haut, -1, LARGEUR_TETE, 0.32, 0.1)
-rangee_dents(ligne_bas, 1, 1.75, 0.28, 0.09, decalage=0.095)
+rangee_dents(ligne_bas, 1, 2.15, 0.28, 0.09, decalage=0.095)
 
 # ---------- oeil noir ovale + reflet, arcade, narines ----------
 for s in (-1, 1):
@@ -243,20 +243,20 @@ for s in (-1, 1):
         q = n.to_track_quat('Z', 'Y')
         ellipse("Oeil", loc, (0.17, 0.25, 0.06), "Oeil", rot=q)
         ellipse("Reflet", loc + n * 0.05 + Vector((0, -0.05, 0.1)), (0.05, 0.06, 0.02), "Reflet", rot=q, seg=8, anneaux=4)
-    boite("Arcade", (s * 0.78, -3.5, 5.0), (0.42, 1.0, 0.24), "Peau", biseau=0.06, avant=(0.7, 0.6), tangage=-8)
-    boite("Narine", (s * 0.34, -4.85, 4.62), (0.18, 0.32, 0.1), "Rayure", biseau=0.03, tangage=-20)
+    boite("Arcade", (s * 0.98, -3.5, 5.0), (0.5, 1.05, 0.26), "Peau", biseau=0.06, avant=(0.7, 0.6), tangage=-8)
+    boite("Narine", (s * 0.42, -4.85, 4.62), (0.18, 0.32, 0.1), "Rayure", biseau=0.03, tangage=-20)
     # deux rainures sombres sur la joue
     for y in (-2.75, -3.0):
         boite("RainureJoue", (s * (LARGEUR_TETE / 2 + 0.005), y, 4.45), (0.04, 0.12, 0.7), "Rayure", biseau=0.0)
 
 # ---------- cou, corps, queue ----------
-boite("Cou", (0, -1.85, 4.15), (1.55, 1.1, 1.35), "Peau", biseau=0.15, tangage=-15)
-corps = boite("Corps", (0, -0.4, 3.6), (2.0, 2.9, 1.95), "Peau", biseau=0.25, avant=(0.9, 0.9))
+boite("Cou", (0, -1.85, 4.1), (2.15, 1.2, 1.7), "Peau", biseau=0.18, tangage=-15)
+corps = boite("Corps", (0, -0.4, 3.5), (2.85, 3.0, 2.55), "Peau", biseau=0.3, avant=(0.92, 0.92))
 queue = [
     # centre, taille, retrecissement arriere, tangage
-    ((0, 1.75, 3.82), (1.7, 1.8, 1.6), (0.75, 0.75), 6),
-    ((0, 3.25, 4.07), (1.27, 1.65, 1.18), (0.7, 0.68), 10),
-    ((0, 4.6, 4.37), (0.88, 1.5, 0.8), (0.45, 0.45), 14),
+    ((0, 1.8, 3.75), (2.35, 1.8, 2.05), (0.74, 0.74), 6),
+    ((0, 3.3, 4.02), (1.74, 1.65, 1.5), (0.68, 0.66), 10),
+    ((0, 4.65, 4.33), (1.18, 1.5, 1.0), (0.45, 0.45), 14),
 ]
 segments = []
 for c, t, arr, tg in queue:
@@ -272,7 +272,7 @@ def bande(obj, y, largeur, hauteur):
 
 
 for y in (-1.2, -0.5, 0.2):
-    bande(corps, y, 2.06, 1.2)
+    bande(corps, y, 2.91, 1.55)
 for obj, (c, t, arr, tg) in zip(segments, queue):
     for k in (-0.25, 0.2):
         y = c[1] + k * t[1]
@@ -281,17 +281,17 @@ for obj, (c, t, arr, tg) in zip(segments, queue):
 
 # ---------- pattes accroupies ----------
 for s in (-1, 1):
-    boite("Cuisse", (s * 1.02, 0.3, 2.95), (0.82, 1.5, 1.65), "Peau", biseau=0.15, avant=(0.9, 0.85), tangage=-10)
-    boite("Tibia", (s * 1.07, 0.6, 1.3), (0.58, 0.62, 1.7), "Peau", biseau=0.1, tangage=22)
-    boite("Pied", (s * 1.07, 0.15, 0.22), (0.8, 1.25, 0.44), "Peau", biseau=0.1, avant=(1.0, 0.8))
-    for dx in (-0.26, 0, 0.26):
-        boite("Orteil", (s * 1.07 + dx, -0.6, 0.17), (0.22, 0.4, 0.3), "Peau", biseau=0.05)
-        cone("Griffe", (s * 1.07 + dx, -0.78, 0.17), 0.09, 0.26, "Griffe", (0, -1, -0.35))
-    # petits bras
-    boite("Bras", (s * 0.98, -1.55, 3.12), (0.3, 0.38, 0.7), "Peau", biseau=0.06, tangage=20)
-    boite("AvantBras", (s * 1.02, -1.88, 2.8), (0.28, 0.62, 0.28), "Peau", biseau=0.06)
-    for dx in (-0.07, 0.07):
-        cone("GriffeMain", (s * 1.02 + dx, -2.18, 2.8), 0.05, 0.16, "Griffe", (0, -1, -0.5))
+    boite("Cuisse", (s * 1.38, 0.3, 2.85), (1.2, 1.9, 2.0), "Peau", biseau=0.2, avant=(0.9, 0.85), tangage=-10)
+    boite("Tibia", (s * 1.45, 0.62, 1.3), (0.9, 0.9, 1.75), "Peau", biseau=0.14, tangage=22)
+    boite("Pied", (s * 1.45, 0.1, 0.26), (1.2, 1.5, 0.52), "Peau", biseau=0.12, avant=(1.0, 0.8))
+    for dx in (-0.36, 0, 0.36):
+        boite("Orteil", (s * 1.45 + dx, -0.78, 0.2), (0.32, 0.5, 0.38), "Peau", biseau=0.06)
+        cone("Griffe", (s * 1.45 + dx, -1.0, 0.2), 0.12, 0.32, "Griffe", (0, -1, -0.35))
+    # petits bras (costauds)
+    boite("Bras", (s * 1.42, -1.6, 3.15), (0.45, 0.52, 0.85), "Peau", biseau=0.08, tangage=20)
+    boite("AvantBras", (s * 1.47, -1.98, 2.75), (0.42, 0.75, 0.4), "Peau", biseau=0.08)
+    for dx in (-0.1, 0.1):
+        cone("GriffeMain", (s * 1.47 + dx, -2.35, 2.75), 0.07, 0.22, "Griffe", (0, -1, -0.5))
 
 # ---------- poser au sol ----------
 bas = min((o.matrix_world @ v.co).z for o in bpy.data.objects if o.type == 'MESH' for v in o.data.vertices)
