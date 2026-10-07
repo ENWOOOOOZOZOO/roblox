@@ -1,12 +1,13 @@
-"""30 dinos "en blocs" style Roblox (du plus commun au plus rare).
-1 a 20 : les grands dinos. 21 a 30 : les petits dinos.
+"""30 dinos et 8 oeufs "en blocs" style Roblox (du plus commun au plus rare).
+1 a 20 : les grands dinos. 21 a 30 : les petits dinos. Oeufs : voir OEUFS plus bas.
 
 Utilisation : Blender > onglet "Scripting" > Open (dinos.py) > Run Script (triangle).
 Construit chaque dino, calcule sa texture a studs, l'exporte en .glb dans
 le dossier "dinos" de ton dossier utilisateur, puis passe au suivant.
 (Compter quelques minutes pour les 20.)
 Pour n'en faire qu'un : mets son numero dans SEULEMENT, par exemple SEULEMENT = [18].
-MODE : "adultes", "bebes" (versions bebe mignonnes, dans le dossier "bebes") ou "tous".
+MODE : "adultes", "bebes" (versions bebe mignonnes, dans le dossier "bebes"),
+"oeufs" (dans le dossier "oeufs") ou "tous".
 
 Dans Roblox Studio : Avatar > Import 3D.
 """
@@ -19,20 +20,24 @@ import numpy as np
 from mathutils import Vector, Quaternion
 
 SEULEMENT = []          # vide = les 20
-MODE = "tous"           # "adultes", "bebes" ou "tous"
+MODE = "tous"           # "adultes", "bebes", "oeufs" ou "tous"
 DOSSIER = os.path.join(os.path.expanduser("~"), "dinos")
 DOSSIER_BEBES = os.path.join(os.path.expanduser("~"), "bebes")
+DOSSIER_OEUFS = os.path.join(os.path.expanduser("~"), "oeufs")
 BEBE = False            # change pendant la construction
 PUPILLE = False         # ajoute une pupille noire quand l'oeil est colore
 STUDS_PAR_UNITE = 5.0
 TEXTURE = 1024
-AVEC_STUDS = {"Peau", "Rayure", "Ventre", "Accent"}
+AVEC_STUDS = {"Peau", "Rayure", "Ventre", "Accent", "Coquille", "Bande", "Tache", "Deco1", "Deco2"}
 
 COULEURS_DE_BASE = {
     "Peau": (128, 146, 78), "Rayure": (86, 102, 54), "Ventre": (232, 228, 218),
     "Accent": (200, 120, 60), "Corne": (236, 226, 196), "Dent": (255, 255, 255),
     "Bouche": (206, 24, 36), "Oeil": (12, 12, 14), "Reflet": (255, 255, 255),
     "Griffe": (240, 238, 230), "Pupille": (12, 12, 14),
+    # oeufs
+    "Coquille": (236, 222, 176), "Bande": (214, 194, 140), "Tache": (196, 170, 116), "Deco1": (150, 110, 64),
+    "Deco2": (120, 86, 50), "Lueur": (255, 90, 80), "Os": (244, 240, 226), "Noir": (24, 22, 22),
 }
 
 
@@ -988,7 +993,7 @@ def microraptor():
 # =====================================================================
 #  FINITION : fusion, ventre clair, UV, texture a studs, export
 # =====================================================================
-def finaliser(nom_fichier, couleurs, echelle):
+def finaliser(nom_fichier, couleurs, echelle, dossier=None):
     bas = min((o.matrix_world @ v.co).z for o in objets() for v in o.data.vertices)
     for o in objets():
         o.location.z -= bas
@@ -1007,7 +1012,8 @@ def finaliser(nom_fichier, couleurs, echelle):
     if "Ventre" not in noms:
         me.materials.append(matiere("Ventre"))
         noms.append("Ventre")
-    i_peau, i_ventre = noms.index("Peau"), noms.index("Ventre")
+    i_peau = noms.index("Peau") if "Peau" in noms else -1
+    i_ventre = noms.index("Ventre")
     for p in me.polygons:
         p.use_smooth = False
         if p.material_index == i_peau and p.normal.z < -0.55:
@@ -1101,7 +1107,7 @@ def finaliser(nom_fichier, couleurs, echelle):
     for p in me.polygons:
         p.material_index = 0
 
-    dossier = DOSSIER_BEBES if BEBE else DOSSIER
+    dossier = dossier or (DOSSIER_BEBES if BEBE else DOSSIER)
     os.makedirs(dossier, exist_ok=True)
     chemin = os.path.join(dossier, nom_fichier + ".glb")
     activer(d)
@@ -1109,6 +1115,257 @@ def finaliser(nom_fichier, couleurs, echelle):
     nb = sum(len(p.vertices) - 2 for p in me.polygons)
     print(f"Export OK : {chemin} ({nb} triangles)")
     return d
+
+
+# =====================================================================
+#  LES OEUFS (chacun contient 3 a 5 dinos)
+# =====================================================================
+def coquille(hauteur, rayon, couches, bas=0.5, bande=None):
+    """Oeuf en couches de blocs empilees. bande(i) -> nom de couleur de la couche i."""
+    dz = hauteur / couches
+    for i in range(couches):
+        t = (i + 0.5) / couches
+        k = (t - 0.42) / (0.58 if t > 0.42 else 0.42)
+        r = max(rayon * math.sqrt(max(0.0, 1 - k * k)), rayon * 0.28)
+        mat = bande(i) if bande else "Coquille"
+        z = bas + i * dz + dz / 2
+        boite("Couche", (0, 0, z), (2 * r, 2 * r * 0.72, dz * 1.02), mat, biseau=0.04)
+        # un peu moins haut : sinon les dessus des deux blocs se superposent (scintillement)
+        boite("Couche", (0, 0, z), (2 * r * 0.72, 2 * r, dz * 0.97), mat, biseau=0.04)
+    return [o for o in objets() if o.name.startswith("Couche")]
+
+
+def blocs_surface(cibles, n, taille, mat, z_min, z_max, saillie=0.35):
+    """Petits blocs colles sur la coquille (relief ou taches)."""
+    for _ in range(n):
+        a = random.uniform(0, 2 * math.pi)
+        z = random.uniform(z_min, z_max)
+        d = Vector((math.cos(a), math.sin(a), 0))
+        loc, nrm = toucher(cibles, Vector((0, 0, z)) + d * 20, -d)
+        if loc is None:
+            continue
+        t = taille * random.uniform(0.7, 1.3)
+        boite("Bloc", loc + nrm * t * (saillie - 0.5), (t, t, t * random.uniform(0.8, 1.6)), mat, biseau=0.03)
+
+
+def eclats(n, rayon, z, hauteur, mat, mat2=None, inclinaison=25, largeur=0.45, decal=0.0):
+    """Cristaux / flammes / roseaux en couronne autour de l'oeuf."""
+    for k in range(n):
+        a = 2 * math.pi * k / n + decal + random.uniform(-0.15, 0.15)
+        h = hauteur * random.uniform(0.7, 1.2)
+        x, y = rayon * math.cos(a), rayon * math.sin(a)
+        tilt = inclinaison * random.uniform(0.6, 1.2)
+        o = boite("Eclat", (x, y, z + h / 2), (largeur, largeur, h), mat if (k % 2 == 0 or not mat2) else mat2,
+                  avant=(0.6, 0.6), arriere=(0.6, 0.6), biseau=0.04)
+        # penche vers l'exterieur
+        o.rotation_euler = (math.radians(-tilt * math.sin(a)), math.radians(tilt * math.cos(a)), 0)
+        o.location = (x + math.cos(a) * h * 0.2, y + math.sin(a) * h * 0.2, z + h / 2)
+
+
+def nid_batons(n, rayon, z, longueur, mat, mat2):
+    for k in range(n):
+        a = 2 * math.pi * k / n + random.uniform(-0.1, 0.1)
+        x, y = rayon * math.cos(a), rayon * math.sin(a)
+        boite("Baton", (x, y, z + random.uniform(-0.1, 0.15)), (0.32, longueur * random.uniform(0.8, 1.2), 0.3),
+              mat if k % 2 else mat2, biseau=0.05, tangage=random.uniform(-25, 25),
+              roulis=random.uniform(-20, 20), lacet=math.degrees(a) + random.uniform(-20, 20))
+
+
+def crane_fossile(cibles, z):
+    loc, n = toucher(cibles, (0, -20, z), (0, 1, 0))
+    if loc is None:
+        return
+    y = loc.y - 0.02
+    plaque("Crane", [(-0.75, -0.35), (-0.85, 0.15), (-0.55, 0.55), (0.2, 0.6), (0.75, 0.3), (0.85, -0.1),
+                     (0.6, -0.4), (-0.3, -0.45)], 0.12, "Os", plan="xz", decalage=(0, y, z), biseau=0.02)
+    boite("OrbiteCrane", (-0.35, y - 0.06, z + 0.15), (0.32, 0.06, 0.28), "Noir", biseau=0)
+    boite("NezCrane", (0.45, y - 0.06, z + 0.1), (0.14, 0.06, 0.12), "Noir", biseau=0)
+    for k in range(6):
+        boite("DentCrane", (-0.45 + k * 0.2, y - 0.06, z - 0.3), (0.1, 0.06, 0.14), "Noir", biseau=0)
+
+
+def eclair(x, y, z, cote, taille, mat):
+    pts = [(0, 0), (0.35, 0.55), (0.12, 0.55), (0.4, 1.0), (-0.05, 0.4), (0.15, 0.4), (-0.15, 0)]
+    o = plaque("Eclair", [(px * taille, pz * taille) for px, pz in pts], 0.12, mat, plan="xz", decalage=(x, y, z),
+               biseau=0.02)
+    o.rotation_euler = (0, 0, math.radians(cote))
+
+
+def feuille(angle, rayon, z, longueur, mat):
+    pts = [(0, 0), (longueur * 0.35, -longueur * 0.22), (longueur, 0), (longueur * 0.35, longueur * 0.22)]
+    o = plaque("Feuille", pts, 0.08, mat, plan="xy", decalage=(rayon * math.cos(angle), rayon * math.sin(angle), z),
+               biseau=0.02)
+    o.rotation_euler = (0, math.radians(-28), angle)
+
+
+def socle(rayon, hauteur, mat, n=1):
+    boite("Socle", (0, 0, hauteur / 2), (rayon * 2, rayon * 2, hauteur), mat, biseau=0.08)
+    if n > 1:
+        boite("Socle", (0, 0, hauteur / 2), (rayon * 2.4, rayon * 1.4, hauteur * 0.8), mat, biseau=0.08)
+        boite("Socle", (0, 0, hauteur / 2), (rayon * 1.4, rayon * 2.4, hauteur * 0.8), mat, biseau=0.08)
+
+
+def theme(**kw):
+    c = dict(COULEURS_DE_BASE)
+    c.update(kw)
+    return c
+
+
+OEUFS = []
+
+
+def oeuf(numero, nom, rarete, prix, dinos, couleurs):
+    """dinos : liste de (numero du dino, chance en %)."""
+    def deco(f):
+        OEUFS.append(dict(numero=numero, nom=nom, rarete=rarete, prix=prix, dinos=dinos, couleurs=couleurs, f=f))
+        return f
+    return deco
+
+
+@oeuf(1, "Oeuf de Sable", "Commun", 100, [(1, 40), (21, 30), (22, 20), (2, 10)],
+      theme(Coquille=(238, 222, 176), Bande=(222, 200, 148), Tache=(204, 178, 120), Deco1=(176, 132, 74),
+            Deco2=(140, 100, 56)))
+def oeuf_sable():
+    c = coquille(3.6, 1.45, 11, bas=0.45, bande=lambda i: "Bande" if i % 3 == 1 else "Coquille")
+    blocs_surface(c, 26, 0.3, "Coquille", 0.8, 3.6)
+    blocs_surface(c, 10, 0.3, "Tache", 0.8, 3.4)
+    nid_batons(14, 1.55, 0.35, 2.2, "Deco1", "Deco2")
+    nid_batons(10, 1.0, 0.55, 1.6, "Deco2", "Deco1")
+    crane_fossile(c, 1.7)
+
+
+@oeuf(2, "Oeuf de Jungle", "Commun", 500, [(3, 35), (4, 30), (23, 25), (5, 10)],
+      theme(Coquille=(132, 186, 96), Bande=(88, 140, 62), Tache=(222, 214, 120), Deco1=(64, 150, 64),
+            Deco2=(46, 110, 48)))
+def oeuf_jungle():
+    c = coquille(3.7, 1.45, 12, bas=0.45, bande=lambda i: "Bande" if i in (3, 4, 8) else "Coquille")
+    blocs_surface(c, 16, 0.32, "Tache", 0.8, 3.7)
+    blocs_surface(c, 14, 0.28, "Coquille", 0.8, 3.7)
+    socle(1.5, 0.45, "Deco2")
+    for k in range(9):
+        feuille(2 * math.pi * k / 9, 0.9, 0.5, 1.8, "Deco1" if k % 2 else "Deco2")
+    for k in range(3):  # lianes
+        a = 2 * math.pi * k / 3 + 0.4
+        for z in np.linspace(0.9, 3.0, 6):
+            loc, nrm = toucher(c, (math.cos(a + z * 0.4) * 20, math.sin(a + z * 0.4) * 20, z),
+                               (-math.cos(a + z * 0.4), -math.sin(a + z * 0.4), 0))
+            if loc:
+                boite("Liane", loc, (0.22, 0.22, 0.42), "Deco2", biseau=0.03)
+
+
+@oeuf(3, "Oeuf du Marais", "Peu commun", 2000, [(6, 35), (24, 30), (25, 25), (7, 10)],
+      theme(Coquille=(92, 156, 150), Bande=(60, 112, 108), Tache=(166, 210, 120), Deco1=(108, 128, 60),
+            Deco2=(70, 110, 150), Lueur=(120, 82, 50)))
+def oeuf_marais():
+    c = coquille(3.8, 1.5, 12, bas=0.4, bande=lambda i: "Bande" if i % 4 == 2 else "Coquille")
+    blocs_surface(c, 22, 0.34, "Tache", 0.8, 3.8)
+    socle(1.9, 0.35, "Deco2", n=2)
+    for k in range(10):  # roseaux avec leur massette
+        a = 2 * math.pi * k / 10 + 0.2
+        x, y = 1.85 * math.cos(a), 1.85 * math.sin(a)
+        h = random.uniform(1.6, 2.6)
+        boite("Roseau", (x, y, h / 2), (0.14, 0.14, h), "Deco1", biseau=0.02)
+        boite("Massette", (x, y, h - 0.1), (0.24, 0.24, 0.55), "Lueur", biseau=0.04)
+
+
+@oeuf(4, "Oeuf de Canyon", "Rare", 7500, [(26, 35), (9, 30), (10, 25), (8, 10)],
+      theme(Coquille=(196, 120, 84), Bande=(160, 90, 62), Tache=(226, 168, 120), Deco1=(150, 140, 130),
+            Deco2=(110, 102, 96)))
+def oeuf_canyon():
+    c = coquille(3.9, 1.55, 12, bas=0.45, bande=lambda i: "Bande" if i % 2 else "Coquille")
+    blocs_surface(c, 18, 0.34, "Tache", 0.8, 3.9)
+    # fissures
+    for a0 in (0.3, 2.4, 4.2):
+        z = 1.0
+        a = a0
+        while z < 3.6:
+            d = Vector((math.cos(a), math.sin(a), 0))
+            loc, nrm = toucher(c, Vector((0, 0, z)) + d * 20, -d)
+            if loc:
+                boite("Fissure", loc, (0.14, 0.14, 0.36), "Noir", biseau=0)
+            z += 0.3
+            a += random.choice((-0.12, 0.12))
+    socle(1.6, 0.45, "Deco2")
+    for k in range(14):  # rochers
+        a = random.uniform(0, 2 * math.pi)
+        r = random.uniform(1.3, 1.9)
+        t = random.uniform(0.35, 0.75)
+        boite("Rocher", (r * math.cos(a), r * math.sin(a), 0.4 + t / 2), (t, t * 1.2, t),
+              random.choice(("Deco1", "Deco2")), lacet=random.uniform(0, 90))
+
+
+@oeuf(5, "Oeuf de Glace", "Rare", 25000, [(27, 45), (11, 35), (12, 20)],
+      theme(Coquille=(196, 228, 248), Bande=(140, 196, 236), Tache=(250, 252, 255), Deco1=(248, 250, 255),
+            Deco2=(228, 238, 248), Lueur=(110, 220, 255)))
+def oeuf_glace():
+    c = coquille(4.0, 1.55, 13, bas=0.5, bande=lambda i: "Bande" if i in (2, 5, 9) else "Coquille")
+    blocs_surface(c, 20, 0.32, "Tache", 0.9, 4.0)
+    socle(1.7, 0.5, "Deco1", n=2)
+    eclats(10, 1.7, 0.4, 1.8, "Lueur", "Coquille", inclinaison=22, largeur=0.42)
+    blocs_surface(c, 8, 0.3, "Lueur", 1.0, 3.8, saillie=0.6)
+    for k in range(6):  # neige sur le haut
+        a = 2 * math.pi * k / 6
+        boite("Neige", (0.5 * math.cos(a), 0.5 * math.sin(a), 4.3), (0.6, 0.6, 0.25), "Deco1", biseau=0.06)
+
+
+@oeuf(6, "Oeuf de Tempete", "Epique", 100000, [(13, 35), (28, 30), (14, 25), (15, 10)],
+      theme(Coquille=(128, 104, 196), Bande=(236, 236, 250), Tache=(92, 72, 156), Deco1=(244, 244, 252),
+            Deco2=(206, 210, 230), Lueur=(255, 226, 60)))
+def oeuf_tempete():
+    c = coquille(4.1, 1.6, 13, bas=0.7, bande=lambda i: "Bande" if i % 3 == 0 else "Coquille")
+    blocs_surface(c, 20, 0.34, "Tache", 1.0, 4.2)
+    for k in range(16):  # nuages
+        a = 2 * math.pi * k / 16
+        r = random.uniform(1.3, 1.9)
+        t = random.uniform(0.6, 1.0)
+        boite("Nuage", (r * math.cos(a), r * math.sin(a), 0.4 + random.uniform(0, 0.35)), (t * 1.3, t, t * 0.8),
+              random.choice(("Deco1", "Deco2")), biseau=0.15, lacet=math.degrees(a))
+    for a in (0.2, 2.3, 4.3):
+        eclair(1.65 * math.cos(a), 1.65 * math.sin(a), 1.4, math.degrees(a) + 90, 1.6, "Lueur")
+
+
+@oeuf(7, "Oeuf des Abysses", "Legendaire", 400000, [(16, 45), (17, 35), (29, 20)],
+      theme(Coquille=(30, 54, 110), Bande=(20, 36, 78), Tache=(60, 220, 230), Deco1=(250, 110, 140),
+            Deco2=(250, 170, 80), Lueur=(80, 240, 255)))
+def oeuf_abysses():
+    c = coquille(4.2, 1.6, 13, bas=0.5, bande=lambda i: "Bande" if i % 2 else "Coquille")
+    blocs_surface(c, 18, 0.3, "Lueur", 0.9, 4.2, saillie=0.55)
+    blocs_surface(c, 14, 0.34, "Coquille", 0.9, 4.2)
+    socle(1.7, 0.5, "Bande", n=2)
+    for k in range(7):  # coraux
+        a = 2 * math.pi * k / 7 + 0.3
+        x, y = 1.75 * math.cos(a), 1.75 * math.sin(a)
+        mat = "Deco1" if k % 2 else "Deco2"
+        h = random.uniform(1.0, 1.8)
+        boite("Corail", (x, y, 0.5 + h / 2), (0.3, 0.3, h), mat, biseau=0.04)
+        for s in (-1, 1):
+            boite("Branche", (x + s * 0.3 * math.sin(a), y - s * 0.3 * math.cos(a), 0.5 + h * 0.75),
+                  (0.22, 0.22, h * 0.5), mat, biseau=0.03)
+    eclats(6, 1.6, 0.5, 1.2, "Lueur", inclinaison=15, largeur=0.3, decal=0.5)
+
+
+@oeuf(8, "Oeuf de Volcan", "Mythique", 1500000, [(18, 50), (19, 30), (30, 19), (20, 1)],
+      theme(Coquille=(34, 26, 28), Bande=(108, 24, 26), Tache=(150, 30, 30), Deco1=(108, 24, 26),
+            Deco2=(54, 34, 34), Lueur=(255, 82, 72)))
+def oeuf_volcan():
+    c = coquille(4.4, 1.7, 13, bas=0.5, bande=lambda i: "Bande" if i % 2 else "Coquille")
+    blocs_surface(c, 22, 0.42, "Bande", 0.9, 4.4)
+    blocs_surface(c, 10, 0.3, "Lueur", 0.9, 4.0, saillie=0.6)
+    socle(1.8, 0.5, "Deco2", n=2)
+    eclats(8, 1.75, 0.3, 2.4, "Lueur", "Deco1", inclinaison=18, largeur=0.5)
+    # deux cornes sur le dessus
+    for s in (-1, 1):
+        for k, (dx, dz, h) in enumerate(((0.45, 4.6, 0.9), (0.65, 5.3, 0.8), (0.75, 5.95, 0.7))):
+            boite("Corne", (s * dx, 0, dz), (0.45, 0.45, h), "Deco1" if k < 2 else "Lueur", biseau=0.04,
+                  roulis=s * (12 + k * 10))
+
+
+def construire_oeuf(oe):
+    nettoyer()
+    random.seed(100 + oe["numero"])
+    oe["f"]()
+    fichier = f"oeuf_{oe['numero']}_{oe['nom'].split(' ')[-1].lower()}"
+    return finaliser(fichier, oe["couleurs"], 1.0, dossier=DOSSIER_OEUFS)
 
 
 def construire(numero, bebe=False):
@@ -1130,7 +1387,11 @@ def construire(numero, bebe=False):
 
 
 if __name__ == "__main__":
-    versions = {"adultes": [False], "bebes": [True]}.get(MODE, [False, True])
+    versions = {"adultes": [False], "bebes": [True], "oeufs": []}.get(MODE, [False, True])
+    if MODE in ("oeufs", "tous"):
+        for oe in OEUFS:
+            print(f"--- {oe['nom']} ({oe['rarete']}) ---")
+            construire_oeuf(oe)
     for bebe in versions:
         for num, nom, rarete, *_ in DINOS:
             if SEULEMENT and num not in SEULEMENT:
