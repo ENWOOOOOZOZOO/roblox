@@ -7,7 +7,8 @@ le dossier "dinos" de ton dossier utilisateur, puis passe au suivant.
 (Compter quelques minutes pour les 20.)
 Pour n'en faire qu'un : mets son numero dans SEULEMENT, par exemple SEULEMENT = [18].
 MODE : "adultes", "bebes" (versions bebe mignonnes, dans le dossier "bebes"),
-"oeufs" (dans le dossier "oeufs"), "machine" (machine a fossiles) ou "tous".
+"oeufs" (dans le dossier "oeufs"), "machine" (machine a fossiles), "outils" (30 outils pour casser)
+ou "tous".
 
 Dans Roblox Studio : Avatar > Import 3D.
 """
@@ -17,10 +18,10 @@ import math
 import os
 import random
 import numpy as np
-from mathutils import Vector, Quaternion
+from mathutils import Vector, Quaternion, Matrix
 
 SEULEMENT = []          # vide = les 20
-MODE = "tous"           # "adultes", "bebes", "oeufs", "machine" ou "tous"
+MODE = "tous"           # "adultes", "bebes", "oeufs", "machine", "outils" ou "tous"
 DOSSIER = os.path.join(os.path.expanduser("~"), "dinos")
 DOSSIER_BEBES = os.path.join(os.path.expanduser("~"), "bebes")
 DOSSIER_OEUFS = os.path.join(os.path.expanduser("~"), "oeufs")
@@ -28,7 +29,8 @@ BEBE = False            # change pendant la construction
 PUPILLE = False         # ajoute une pupille noire quand l'oeil est colore
 STUDS_PAR_UNITE = 5.0
 TEXTURE = 1024
-AVEC_STUDS = {"Peau", "Rayure", "Ventre", "Accent", "Coquille", "Bande", "Tache", "Deco1", "Deco2", "Metal", "MetalFonce"}
+AVEC_STUDS = {"Peau", "Rayure", "Ventre", "Accent", "Coquille", "Bande", "Tache", "Deco1", "Deco2", "Metal", "MetalFonce",
+              "Manche", "Grip", "Tete", "Tete2"}
 
 COULEURS_DE_BASE = {
     "Peau": (128, 146, 78), "Rayure": (86, 102, 54), "Ventre": (232, 228, 218),
@@ -41,6 +43,9 @@ COULEURS_DE_BASE = {
     # machine
     "Metal": (156, 166, 182), "MetalFonce": (72, 80, 96), "Danger": (250, 200, 40), "Ecran": (18, 52, 70),
     "Bouton": (232, 62, 50), "Vitre": (170, 230, 250),
+    # outils
+    "Manche": (150, 100, 60), "Grip": (60, 44, 34), "Tete": (170, 170, 176), "Tete2": (120, 120, 128),
+    "Lame": (230, 234, 240), "Gemme": (90, 220, 240),
 }
 
 
@@ -1210,8 +1215,10 @@ def socle(rayon, hauteur, mat, n=1):
         boite("Socle", (0, 0, hauteur / 2), (rayon * 1.4, rayon * 2.4, hauteur * 0.8), mat, biseau=0.08)
 
 
-def theme(**kw):
+def theme(*bases, **kw):
     c = dict(COULEURS_DE_BASE)
+    for b in bases:
+        c.update(b)
     c.update(kw)
     return c
 
@@ -1480,6 +1487,461 @@ def construire_machine():
     return d
 
 
+# =====================================================================
+#  LES 30 OUTILS POUR CASSER (manche vertical, on tient le bas)
+# =====================================================================
+def manche(L=4.0, w=0.34, mat="Manche", pommeau="Tete2", bagues=(), grip=True):
+    boite("Manche", (0, 0, L / 2), (w, w, L), mat, biseau=w * 0.15)
+    if grip:
+        for k in range(4):
+            boite("Grip", (0, 0, 0.45 + k * 0.32), (w * 1.18, w * 1.18, 0.22), "Grip", biseau=w * 0.08)
+    boite("Pommeau", (0, 0, 0.12), (w * 1.55, w * 1.55, 0.26), pommeau, biseau=0.05)
+    for z, m in bagues:
+        boite("Bague", (0, 0, z), (w * 1.3, w * 1.3, 0.16), m, biseau=0.03)
+
+
+def gemme(pos, t, mat="Gemme"):
+    return ellipse("Gemme", pos, (t, t * 0.7, t * 1.3), mat, seg=4, anneaux=2,
+                   rot=Quaternion((0, 0, 1), math.radians(45)))
+
+
+def bras_courbe(depart, s, envergure, ep, largeur, courbe, mat, segments=4, pointe=None, effile=0.45,
+                mats=None):
+    """Bras de pioche : blocs le long d'un arc qui retombe, puis une pointe."""
+    p = Vector(depart)
+    a = 0.0
+    L = envergure / segments
+    w = largeur
+    for i in range(segments):
+        a += courbe / segments
+        r = math.radians(a)
+        d = Vector((s * math.cos(r), 0, -math.sin(r)))
+        w = largeur * (1 - effile * i / segments)
+        m = mats[i % len(mats)] if mats else mat
+        boite("Bras", p + d * L / 2, (L * 1.12, ep, w), m, biseau=min(ep, w) * 0.15, roulis=s * a)
+        p = p + d * L * 0.95
+    if pointe:
+        cone("Pointe", p - d * 0.05, w * 0.6, L * 1.1, pointe, d, sommets=4, echelle=(1, ep / w * 1.2, 1))
+    return p, d
+
+
+def tete_pioche(zc, envergure=1.6, ep=0.36, largeur=0.5, courbe=35, mat="Tete", pointe="Tete2", double=True,
+                segments=4, centre=None, mats=None):
+    boite("Centre", (0, 0, zc), (0.7, ep * 1.5, 0.75), centre or mat, biseau=0.06)
+    bouts = []
+    for s in ((-1, 1) if double else (1,)):
+        bouts.append(bras_courbe((s * 0.3, 0, zc), s, envergure, ep, largeur, courbe, mat, segments, pointe,
+                                 mats=mats))
+    return bouts
+
+
+def tete_marteau(zc, longueur=1.7, cote=0.8, mat="Tete", bouts="Tete2", decal=0.0):
+    boite("TeteMarteau", (decal, 0, zc), (longueur, cote, cote), mat, biseau=cote * 0.1)
+    for s in (-1, 1):
+        boite("Frappe", (decal + s * longueur / 2, 0, zc), (0.18, cote * 1.15, cote * 1.15), bouts, biseau=0.04)
+
+
+def lame_hache(zc, taille, s, mat="Tete", tranchant="Lame", ep=0.16):
+    pts = [(0, -0.45), (taille * 0.55, -taille * 0.75), (taille, -taille * 0.85), (taille * 1.08, 0),
+           (taille, taille * 0.85), (taille * 0.55, taille * 0.75), (0, 0.45)]
+    plaque("Lame", [(s * x, z) for x, z in pts], ep, mat, plan="xz", decalage=(0, 0, zc), biseau=0.03)
+    bord = [(taille * 0.78, -taille * 0.82), (taille, -taille * 0.85), (taille * 1.08, 0), (taille, taille * 0.85),
+            (taille * 0.78, taille * 0.82), (taille * 0.86, 0)]
+    plaque("Tranchant", [(s * x, z) for x, z in bord], ep * 1.25, tranchant, plan="xz", decalage=(0, 0, zc),
+           biseau=0.02)
+
+
+def lame_pelle(z0, largeur, longueur, mat="Tete", bord="Lame"):
+    pts = [(-largeur / 2, 0), (largeur / 2, 0), (largeur / 2, longueur * 0.7), (0, longueur),
+           (-largeur / 2, longueur * 0.7)]
+    plaque("Pelle", pts, 0.16, mat, plan="xz", decalage=(0, 0, z0), biseau=0.03)
+    plaque("BordPelle", [(-largeur / 2, longueur * 0.68), (0, longueur), (largeur / 2, longueur * 0.68),
+                         (0, longueur * 0.82)], 0.2, bord, plan="xz", decalage=(0, 0, z0), biseau=0.02)
+
+
+def meche(depart, direction, longueur, rayon, mat="Tete", mat2="Lame", tours=6):
+    """Meche de foreuse : blocs tournes en spirale qui retrecissent + pointe."""
+    d = Vector(direction).normalized()
+    q = d.to_track_quat('Z', 'Y')
+    for k in range(tours):
+        t = k / tours
+        r = rayon * (1 - 0.75 * t)
+        c = Vector(depart) + d * longueur * (t + 0.5 / tours)
+        o = boite("Meche", c, (r * 2, r * 2, longueur / tours * 0.95), mat if k % 2 == 0 else mat2, biseau=0.03)
+        o.rotation_mode = 'QUATERNION'
+        o.rotation_quaternion = q @ Quaternion((0, 0, 1), math.radians(k * 25))
+    cone("BoutMeche", Vector(depart) + d * longueur * 0.98, rayon * 0.3, rayon * 1.2, mat2, d, sommets=4)
+
+
+def tourner(avant, angle, axe, pivot):
+    R = Matrix.Translation(pivot) @ Matrix.Rotation(math.radians(angle), 4, axe) @ Matrix.Translation(-Vector(pivot))
+    for o in objets():
+        if o not in avant:
+            o.matrix_world = R @ o.matrix_world
+
+
+def cristaux(centre, n, taille, mat="Gemme", rayon=0.4):
+    for k in range(n):
+        a = 2 * math.pi * k / n + random.uniform(-0.3, 0.3)
+        d = Vector((math.cos(a), random.uniform(-0.3, 0.3), math.sin(a) * 0.6 + 0.6))
+        cone("Cristal", Vector(centre) + d.normalized() * rayon * 0.5, taille * 0.3, taille * random.uniform(0.7, 1.2),
+             mat, d, sommets=5)
+
+
+def eclair_plat(x, y, z, taille, mat="Lueur", miroir=1):
+    pts = [(0, 0), (0.35, 0.55), (0.12, 0.55), (0.4, 1.0), (-0.05, 0.4), (0.15, 0.4), (-0.15, 0)]
+    plaque("Eclair", [(miroir * px * taille, pz * taille) for px, pz in pts], 0.1, mat, plan="xz",
+           decalage=(x, y, z), biseau=0.01)
+
+
+OUTILS = []
+
+
+def outil(numero, nom, rarete, couleurs):
+    def deco(f):
+        OUTILS.append(dict(numero=numero, nom=nom, rarete=rarete, couleurs=couleurs, f=f))
+        return f
+    return deco
+
+
+BOIS = dict(Manche=(150, 100, 60), Grip=(96, 64, 40), Tete2=(120, 82, 48))
+MANCHE_SOMBRE = dict(Manche=(70, 52, 40), Grip=(30, 26, 26))
+
+
+@outil(1, "Pioche en bois", "Commun", theme(BOIS, Tete=(178, 128, 76)))
+def o_pioche_bois():
+    manche(grip=False)
+    tete_pioche(3.8, envergure=1.4, courbe=25, segments=3, pointe="Tete2")
+
+
+@outil(2, "Pelle en bois", "Commun", theme(BOIS, Tete=(186, 136, 82), Lame=(150, 104, 62)))
+def o_pelle_bois():
+    manche(L=3.6, grip=False)
+    lame_pelle(3.4, 1.3, 1.8)
+
+
+@outil(3, "Pioche en pierre", "Commun", theme(BOIS, Tete=(132, 132, 138), Tete2=(100, 100, 108),
+                                              Grip=(206, 176, 116)))
+def o_pioche_pierre():
+    manche()
+    tete_pioche(3.8, envergure=1.5, courbe=30, pointe="Tete2")
+    boite("Corde", (0, 0, 3.8), (0.5, 0.62, 0.9), "Grip", biseau=0.04)
+
+
+@outil(4, "Marteau de pierre", "Commun", theme(BOIS, Tete=(126, 126, 132), Tete2=(96, 96, 104),
+                                               Grip=(206, 176, 116)))
+def o_marteau_pierre():
+    manche(L=3.8)
+    tete_marteau(3.7, 1.6, 0.85)
+    boite("Corde", (0, 0, 3.7), (0.5, 0.95, 1.0), "Grip", biseau=0.04)
+
+
+@outil(5, "Pioche en cuivre", "Commun", theme(BOIS, Tete=(204, 118, 66), Tete2=(236, 160, 104),
+                                              Grip=(80, 54, 36)))
+def o_pioche_cuivre():
+    manche(bagues=((3.3, "Tete"),))
+    tete_pioche(3.8, envergure=1.6, courbe=32, pointe="Tete2")
+
+
+@outil(6, "Pelle en fer", "Commun", theme(MANCHE_SOMBRE, Tete=(186, 192, 204), Tete2=(120, 126, 140),
+                                          Lame=(236, 240, 246)))
+def o_pelle_fer():
+    manche(L=3.8, bagues=((3.5, "Tete2"),))
+    boite("Poignee", (0, 0, 0.2), (0.9, 0.3, 0.25), "Grip")
+    lame_pelle(3.6, 1.4, 2.0)
+
+
+@outil(7, "Pioche en fer", "Peu commun", theme(MANCHE_SOMBRE, Tete=(186, 192, 204), Tete2=(236, 240, 246)))
+def o_pioche_fer():
+    manche(bagues=((3.3, "Tete"),))
+    tete_pioche(3.85, envergure=1.75, courbe=35, pointe="Tete2")
+
+
+@outil(8, "Hache de fer", "Peu commun", theme(MANCHE_SOMBRE, Tete=(176, 184, 198), Tete2=(120, 126, 140),
+                                              Lame=(240, 244, 250)))
+def o_hache_fer():
+    manche(bagues=((3.3, "Tete2"),))
+    boite("Douille", (0, 0, 3.6), (0.55, 0.42, 0.9), "Tete2")
+    lame_hache(3.6, 1.2, 1)
+
+
+@outil(9, "Marteau de geologue", "Peu commun", theme(Manche=(60, 90, 160), Grip=(30, 30, 36), Tete=(170, 176, 190),
+                                                     Tete2=(120, 126, 140)))
+def o_geologue():
+    manche(L=3.7)
+    tete_pioche(3.6, envergure=1.3, courbe=25, double=False, pointe="Tete2")
+    boite("FaceMarteau", (-0.6, 0, 3.6), (0.7, 0.55, 0.55), "Tete", biseau=0.05)
+    boite("Frappe", (-1.0, 0, 3.6), (0.16, 0.65, 0.65), "Tete2", biseau=0.03)
+
+
+@outil(10, "Pioche en or", "Peu commun", theme(MANCHE_SOMBRE, Tete=(250, 200, 50), Tete2=(255, 236, 140),
+                                               Gemme=(230, 40, 60)))
+def o_pioche_or():
+    manche(bagues=((3.3, "Tete"), (1.3, "Tete")))
+    tete_pioche(3.85, envergure=1.8, courbe=35, pointe="Tete2")
+    gemme((0, -0.3, 3.85), 0.2)
+
+
+@outil(11, "Masse en or", "Peu commun", theme(Manche=(70, 52, 40), Grip=(200, 40, 50), Tete=(250, 196, 46),
+                                              Tete2=(196, 140, 30)))
+def o_masse_or():
+    manche(L=4.2, bagues=((3.6, "Tete"),))
+    tete_marteau(4.0, 2.0, 1.15)
+    for s in (-1, 1):
+        boite("Bande", (s * 0.5, 0, 4.0), (0.16, 1.2, 1.2), "Tete2", biseau=0.03)
+
+
+@outil(12, "Pioche de glace", "Rare", theme(Manche=(200, 230, 250), Grip=(60, 120, 190), Tete=(150, 210, 250),
+                                            Tete2=(230, 248, 255), Gemme=(110, 230, 255), Lueur=(160, 240, 255)))
+def o_pioche_glace():
+    manche(mat="Manche", bagues=((3.3, "Tete"),))
+    bouts = tete_pioche(3.85, envergure=1.8, courbe=30, pointe="Lueur")
+    cristaux((0, 0, 4.2), 5, 0.6, "Gemme", rayon=0.5)
+
+
+@outil(13, "Foreuse a main", "Rare", theme(Manche=(60, 64, 76), Grip=(30, 30, 36), Tete=(200, 206, 216),
+                                           Tete2=(250, 196, 40), Lame=(120, 126, 140)))
+def o_foreuse():
+    manche(L=2.6, mat="Manche")
+    boite("Moteur", (0.2, 0, 2.9), (1.4, 0.8, 0.9), "Tete2", biseau=0.1)
+    boite("BandeMoteur", (0.2, 0, 2.9), (0.2, 0.84, 0.94), "Grip", biseau=0.02)
+    boite("Mandrin", (1.05, 0, 2.9), (0.35, 0.6, 0.6), "Lame", biseau=0.05)
+    meche((1.2, 0, 2.9), (1, 0, 0), 1.7, 0.32)
+
+
+@outil(14, "Pioche en os", "Rare", theme(Manche=(236, 226, 200), Grip=(140, 100, 70), Tete=(240, 234, 214),
+                                         Tete2=(250, 248, 236), Os=(240, 234, 214)))
+def o_pioche_os():
+    manche(mat="Manche", pommeau="Tete")
+    for z in (1.6, 2.6):
+        boite("Noeud", (0, 0, z), (0.5, 0.5, 0.22), "Tete", biseau=0.06)
+    bouts = tete_pioche(3.85, envergure=1.7, courbe=38, pointe="Tete2")
+    for p, d in bouts:
+        ellipse("BoutOs", p - d * 0.2, (0.3, 0.25, 0.3), "Tete", seg=6, anneaux=4)
+    boite("Orbite", (0, -0.29, 3.95), (0.18, 0.04, 0.18), "Noir", biseau=0)
+
+
+@outil(15, "Pioche de jade", "Rare", theme(MANCHE_SOMBRE, Tete=(60, 176, 120), Tete2=(250, 210, 80),
+                                           Gemme=(250, 210, 80)))
+def o_pioche_jade():
+    manche(bagues=((3.3, "Tete2"), (1.4, "Tete2")))
+    tete_pioche(3.85, envergure=1.9, courbe=35, pointe="Tete2", centre="Tete2")
+    gemme((0, -0.32, 3.85), 0.22, "Tete")
+
+
+@outil(16, "Marteau-piqueur", "Rare", theme(Manche=(70, 76, 90), Grip=(30, 30, 36), Tete=(232, 70, 50),
+                                             Tete2=(250, 200, 40), Lame=(190, 196, 206)))
+def o_marteau_piqueur():
+    boite("Poignee", (0, 0, 0.25), (1.6, 0.4, 0.4), "Grip", biseau=0.08)
+    boite("Corps", (0, 0, 1.5), (0.9, 0.9, 2.2), "Tete", biseau=0.12)
+    for k in range(5):
+        boite("Danger", (0, -0.46, 1.0 + k * 0.25), (0.92, 0.04, 0.12), "Tete2" if k % 2 else "Grip", biseau=0)
+    boite("Cylindre", (0, 0, 2.9), (0.6, 0.6, 0.7), "Manche", biseau=0.06)
+    boite("Burin", (0, 0, 3.7), (0.28, 0.28, 1.0), "Lame", biseau=0.04)
+    cone("BoutBurin", (0, 0, 4.18), 0.2, 0.4, "Lame", (0, 0, 1), sommets=4)
+
+
+@outil(17, "Pioche en diamant", "Epique", theme(MANCHE_SOMBRE, Tete=(90, 226, 236), Tete2=(220, 252, 255),
+                                                Gemme=(160, 245, 255)))
+def o_pioche_diamant():
+    manche(bagues=((3.3, "Tete"), (1.4, "Tete")))
+    tete_pioche(3.9, envergure=2.0, courbe=36, pointe="Tete2", segments=5)
+    gemme((0, -0.33, 3.9), 0.25)
+    gemme((0, 0, 0.42), 0.18)
+
+
+@outil(18, "Hache double de rubis", "Epique", theme(Manche=(250, 200, 60), Grip=(120, 20, 30), Tete=(210, 36, 56),
+                                                     Tete2=(250, 200, 60), Lame=(255, 140, 150), Gemme=(255, 90, 110)))
+def o_hache_rubis():
+    manche(L=4.2, mat="Manche", pommeau="Tete", bagues=((3.4, "Tete"),))
+    boite("Douille", (0, 0, 3.75), (0.6, 0.44, 1.0), "Tete2")
+    for s in (-1, 1):
+        lame_hache(3.75, 1.35, s)
+    cone("Pique", (0, 0, 4.2), 0.18, 0.7, "Tete2", (0, 0, 1), sommets=4)
+    gemme((0, -0.27, 3.75), 0.2)
+
+
+@outil(19, "Pioche en amethyste", "Epique", theme(MANCHE_SOMBRE, Tete=(150, 80, 210), Tete2=(220, 170, 255),
+                                                  Gemme=(200, 130, 255), Lueur=(230, 190, 255)))
+def o_pioche_amethyste():
+    manche(bagues=((3.3, "Tete"), (1.4, "Tete")))
+    tete_pioche(3.9, envergure=2.0, courbe=34, pointe="Lueur", segments=5)
+    cristaux((0, 0, 4.25), 6, 0.75, "Gemme", rayon=0.5)
+
+
+@outil(20, "Pioche de lave", "Epique", theme(Manche=(40, 34, 34), Grip=(250, 100, 30), Tete=(38, 32, 34),
+                                             Tete2=(255, 120, 30), Lueur=(255, 150, 40)))
+def o_pioche_lave():
+    manche(mat="Manche", pommeau="Lueur", bagues=((3.3, "Lueur"), (2.3, "Lueur"), (1.4, "Lueur")))
+    tete_pioche(3.9, envergure=2.0, courbe=38, pointe="Lueur", segments=5, mats=["Tete", "Tete2"])
+    cone("Flamme", (0, 0, 4.25), 0.3, 0.8, "Lueur", (0, 0, 1), sommets=4)
+    for s in (-1, 1):
+        cone("Flamme", (s * 0.25, 0, 4.2), 0.2, 0.55, "Tete2", (s * 0.4, 0, 1), sommets=4)
+
+
+@outil(21, "Trident tellurique", "Epique", theme(Manche=(60, 90, 80), Grip=(30, 40, 36), Tete=(70, 170, 150),
+                                                  Tete2=(230, 210, 120), Lame=(220, 250, 240), Gemme=(80, 240, 200)))
+def o_trident():
+    manche(L=4.4, mat="Manche", bagues=((3.4, "Tete2"),))
+    boite("Traverse", (0, 0, 4.4), (1.6, 0.36, 0.36), "Tete", biseau=0.05)
+    for x in (-0.7, 0, 0.7):
+        h = 1.3 if x == 0 else 1.0
+        boite("Dent", (x, 0, 4.4 + h / 2), (0.26, 0.26, h), "Tete", biseau=0.04)
+        cone("Pointe", (x, 0, 4.4 + h), 0.2, 0.55, "Lame", (0, 0, 1), sommets=4)
+    gemme((0, -0.25, 4.4), 0.2)
+
+
+@outil(22, "Pioche electrique", "Legendaire", theme(Manche=(36, 36, 44), Grip=(250, 210, 40), Tete=(250, 210, 40),
+                                                    Tete2=(36, 36, 44), Lueur=(120, 230, 255), Gemme=(120, 230, 255)))
+def o_pioche_electrique():
+    manche(mat="Manche", bagues=((3.3, "Lueur"), (2.0, "Lueur")))
+    tete_pioche(3.95, envergure=2.1, courbe=34, pointe="Lueur", segments=5, mats=["Tete", "Tete2"])
+    for s in (-1, 1):
+        eclair_plat(s * 0.5, -0.25, 2.4, 0.9, "Lueur", miroir=s)
+    gemme((0, -0.33, 3.95), 0.24)
+
+
+@outil(23, "Pioche T-Rex", "Legendaire", theme(Peau=(128, 146, 78), Rayure=(86, 102, 54), Manche=(80, 60, 44),
+                                               Grip=(40, 30, 26), Tete2=(240, 236, 220)))
+def o_pioche_trex():
+    manche(L=3.6, bagues=((3.2, "Tete2"),))
+    avant = set(objets())
+    tete_carnivore((0.0, 0.0), 1.9, 0.95, 1.05)
+    # la gueule regarde vers +X, posee en haut du manche
+    tourner(avant, 90, 'Z', (0, 0, 0))
+    for o in objets():
+        if o not in avant:
+            o.location += Vector((-0.6, 0, 3.6))
+    cone("Corne", (-0.7, 0, 4.1), 0.25, 1.4, "Tete2", (-1, 0, -0.3), sommets=4)
+
+
+@outil(24, "Foreuse turbo", "Legendaire", theme(Manche=(40, 40, 48), Grip=(30, 30, 36), Tete=(220, 40, 50),
+                                                Tete2=(250, 200, 50), Lame=(230, 236, 246), Lueur=(120, 230, 255)))
+def o_foreuse_turbo():
+    manche(L=2.6)
+    boite("Moteur", (0.1, 0, 3.0), (1.8, 1.0, 1.2), "Tete", biseau=0.15)
+    for k in range(3):
+        boite("Aileron", (-0.45 + k * 0.3, 0, 3.65), (0.12, 0.8, 0.3), "Tete2", biseau=0.02)
+    boite("Turbo", (-0.85, 0, 3.0), (0.3, 0.8, 0.8), "Lueur", biseau=0.04)
+    boite("Mandrin", (1.15, 0, 3.0), (0.4, 0.75, 0.75), "Tete2", biseau=0.06)
+    meche((1.3, 0, 3.0), (1, 0, 0), 2.2, 0.42, mat="Lame", mat2="Tete2", tours=8)
+
+
+@outil(25, "Faux de l'ombre", "Legendaire", theme(Manche=(30, 26, 36), Grip=(90, 40, 140), Tete=(40, 34, 50),
+                                                  Lame=(180, 120, 255), Gemme=(190, 100, 255), Lueur=(200, 140, 255)))
+def o_faux():
+    manche(L=4.6, bagues=((4.0, "Lueur"), (2.5, "Lueur")))
+    pts = [(0, 0.3), (1.2, 0.35), (2.2, 0.0), (2.9, -0.6), (3.1, -1.2), (2.6, -0.7), (1.8, -0.35), (0.8, -0.25),
+           (0, -0.2)]
+    plaque("LameFaux", pts, 0.16, "Tete", plan="xz", decalage=(0, 0, 4.4), biseau=0.03)
+    bord = [(1.2, -0.1), (1.8, -0.35), (2.6, -0.7), (3.1, -1.2), (2.9, -0.6), (2.2, -0.12)]
+    plaque("Tranchant", bord, 0.2, "Lame", plan="xz", decalage=(0, 0, 4.4), biseau=0.02)
+    gemme((0, -0.25, 4.4), 0.24)
+    cone("Pique", (0, 0, 4.7), 0.15, 0.6, "Lueur", (0, 0, 1), sommets=4)
+
+
+@outil(26, "Marteau du tonnerre", "Legendaire", theme(Manche=(90, 60, 40), Grip=(40, 60, 140), Tete=(170, 176, 196),
+                                                      Tete2=(250, 200, 60), Lueur=(130, 220, 255)))
+def o_marteau_tonnerre():
+    manche(L=3.8, bagues=((3.2, "Tete2"),))
+    tete_marteau(4.1, 2.1, 1.3)
+    for s in (-1, 1):
+        boite("Bande", (s * 0.55, 0, 4.1), (0.2, 1.36, 1.36), "Tete2", biseau=0.03)
+    boite("Rune", (0, -0.67, 4.1), (0.5, 0.04, 0.5), "Lueur", biseau=0)
+    for s in (-1, 1):
+        eclair_plat(s * 1.3, 0, 4.6, 0.7, "Lueur", miroir=s)
+
+
+@outil(27, "Pioche cosmique", "Mythique", theme(Manche=(30, 26, 60), Grip=(120, 60, 200), Tete=(36, 30, 80),
+                                                Tete2=(120, 70, 220), Lueur=(255, 240, 160), Gemme=(255, 120, 220)))
+def o_pioche_cosmique():
+    manche(mat="Manche", bagues=((3.3, "Tete2"), (2.2, "Tete2"), (1.4, "Tete2")))
+    bouts = tete_pioche(4.0, envergure=2.2, courbe=36, pointe="Tete2", segments=5)
+    for _ in range(14):  # etoiles
+        x = random.uniform(-2.0, 2.0)
+        z = 4.0 - 0.18 * abs(x) ** 1.6 + random.uniform(-0.15, 0.15)
+        boite("Etoile", (x, -0.2, z), (0.1, 0.04, 0.1), "Lueur", biseau=0)
+    ellipse("Planete", (0, -0.1, 4.55), (0.38, 0.38, 0.38), "Gemme", seg=10, anneaux=6)
+    boite("Anneau", (0, -0.1, 4.55), (1.1, 0.9, 0.06), "Lueur", biseau=0.02, roulis=20)
+
+
+@outil(28, "Pioche arc-en-ciel", "Mythique", theme(Manche=(250, 250, 250), Grip=(120, 120, 140), Tete=(240, 60, 60),
+                                                   Tete2=(250, 150, 40), Lame=(250, 230, 60), Gemme=(70, 210, 110),
+                                                   Lueur=(70, 160, 250), Accent=(160, 90, 230)))
+def o_pioche_arcenciel():
+    manche(mat="Manche", bagues=((3.3, "Tete"), (2.6, "Tete2"), (1.9, "Lame")))
+    tete_pioche(4.0, envergure=2.2, courbe=36, pointe="Manche", segments=6,
+                mats=["Tete", "Tete2", "Lame", "Gemme", "Lueur", "Accent"], centre="Manche")
+    ellipse("Nuage", (0, -0.05, 4.5), (0.6, 0.35, 0.3), "Manche", seg=8, anneaux=5)
+
+
+@outil(29, "Pioche du dragon", "Mythique", theme(Manche=(40, 20, 24), Grip=(150, 30, 30), Tete=(150, 26, 34),
+                                                 Tete2=(40, 20, 24), Lame=(250, 200, 70), Gemme=(255, 170, 40),
+                                                 Accent=(200, 50, 50), Corne=(240, 220, 180), Rayure=(90, 16, 24)))
+def o_pioche_dragon():
+    manche(mat="Manche", bagues=((3.3, "Lame"), (1.4, "Lame")))
+    tete_pioche(4.0, envergure=2.2, courbe=38, pointe="Lame", segments=5, mats=["Tete", "Accent"])
+    for s in (-1, 1):
+        aile_dragon(s, (0, 0.12, 4.25), 1.0, "Accent", "Rayure")
+        cone("Corne", (s * 0.2, 0, 4.35), 0.12, 0.6, "Corne", (s * 0.3, 0, 1), sommets=4)
+    gemme((0, -0.33, 4.0), 0.26)
+
+
+@outil(30, "Pioche du Roi Fossile", "Secret", theme(Manche=(30, 26, 26), Grip=(250, 200, 50), Tete=(250, 200, 50),
+                                                    Tete2=(30, 26, 26), Lame=(140, 245, 255), Gemme=(255, 60, 80),
+                                                    Lueur=(255, 236, 140), Os=(244, 238, 220)))
+def o_roi_fossile():
+    manche(L=4.4, w=0.4, mat="Manche", pommeau="Tete", bagues=((3.7, "Tete"), (2.7, "Tete"), (1.6, "Tete")))
+    gemme((0, 0, 0.5), 0.2)
+    for z in (2.2, 3.2):
+        gemme((0, -0.24, z), 0.12, "Lame")
+    # ailes en os fossilise derriere la tete
+    for s in (-1, 1):
+        aile_dragon(s, (0, 0.2, 4.5), 1.25, "Tete2", "Os")
+    bouts = tete_pioche(4.3, envergure=2.7, ep=0.42, largeur=0.6, courbe=36, pointe="Lame", segments=6,
+                        mats=["Tete", "Tete2"])
+    for p, d in bouts:
+        gemme(p - d * 0.35 + Vector((0, -0.2, 0)), 0.14, "Lame")
+    # crane fossile au centre
+    boite("Crane", (0, -0.3, 4.3), (0.7, 0.08, 0.6), "Os", biseau=0.02)
+    for sx in (-1, 1):
+        boite("Orbite", (sx * 0.17, -0.35, 4.4), (0.16, 0.04, 0.16), "Noir", biseau=0)
+    for k in range(4):
+        boite("DentCrane", (-0.18 + k * 0.12, -0.35, 4.1), (0.06, 0.04, 0.1), "Noir", biseau=0)
+    # couronne
+    boite("Couronne", (0, 0, 4.9), (0.9, 0.7, 0.3), "Tete", biseau=0.04)
+    for x in (-0.35, 0, 0.35):
+        cone("PointeCouronne", (x, 0, 5.05), 0.14, 0.45 if x == 0 else 0.32, "Tete", (0, 0, 1), sommets=4)
+    gemme((0, -0.36, 4.9), 0.14)
+    for z in (4.6, 5.1):
+        boite("Aura", (0, 0, z), (0.06, 0.06, 0.06), "Lueur", biseau=0)
+
+
+def aile_dragon(s, base, t, membrane, os_mat):
+    """Aile de chauve-souris : membrane + 3 baleines."""
+    pts = [(0.15, -0.1), (0.5, 0.7), (1.0, 1.5), (1.4, 1.95), (1.55, 1.3), (1.9, 1.15), (1.75, 0.6), (2.05, 0.35),
+           (1.3, 0.15), (0.6, -0.05)]
+    plaque("Aile", [(s * x * t, z * t) for x, z in pts], 0.08, membrane, plan="xz", decalage=base, biseau=0.02)
+    for (x0, z0), (x1, z1) in (((0.2, 0), (1.4, 1.95)), ((0.4, 0.1), (1.9, 1.15)), ((0.5, 0.05), (2.05, 0.35))):
+        a = Vector((s * x0 * t, 0, z0 * t)) + Vector(base)
+        b = Vector((s * x1 * t, 0, z1 * t)) + Vector(base)
+        c = (a + b) / 2
+        L = (b - a).length
+        ang = math.degrees(math.atan2(b.z - a.z, abs(b.x - a.x)))
+        boite("Baleine", c + Vector((0, -0.03, 0)), (L, 0.12, 0.1), os_mat, biseau=0.02, roulis=-s * ang)
+
+
+def construire_outil(ou):
+    nettoyer()
+    random.seed(200 + ou["numero"])
+    ou["f"]()
+    nom = ou["nom"].lower()
+    for a, b in (("'", ""), ("-", "_"), (" ", "_"), ("é", "e"), ("è", "e")):
+        nom = nom.replace(a, b)
+    fichier = f"outil_{ou['numero']:02d}_{nom}"
+    return finaliser(fichier, ou["couleurs"], 1.0, dossier=os.path.join(os.path.expanduser("~"), "outils"))
+
+
 def construire(numero, bebe=False):
     global BEBE, PUPILLE
     BEBE = bebe
@@ -1499,7 +1961,13 @@ def construire(numero, bebe=False):
 
 
 if __name__ == "__main__":
-    versions = {"adultes": [False], "bebes": [True], "oeufs": [], "machine": []}.get(MODE, [False, True])
+    versions = {"adultes": [False], "bebes": [True], "oeufs": [], "machine": [], "outils": []}.get(MODE, [False, True])
+    if MODE in ("outils", "tous"):
+        for ou in OUTILS:
+            if SEULEMENT and ou["numero"] not in SEULEMENT:
+                continue
+            print(f"--- Outil {ou['numero']:02d} {ou['nom']} ({ou['rarete']}) ---")
+            construire_outil(ou)
     if MODE in ("machine", "tous"):
         print("--- Machine a fossiles ---")
         construire_machine()
