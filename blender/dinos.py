@@ -7,7 +7,7 @@ le dossier "dinos" de ton dossier utilisateur, puis passe au suivant.
 (Compter quelques minutes pour les 20.)
 Pour n'en faire qu'un : mets son numero dans SEULEMENT, par exemple SEULEMENT = [18].
 MODE : "adultes", "bebes" (versions bebe mignonnes, dans le dossier "bebes"),
-"oeufs" (dans le dossier "oeufs") ou "tous".
+"oeufs" (dans le dossier "oeufs"), "machine" (machine a fossiles) ou "tous".
 
 Dans Roblox Studio : Avatar > Import 3D.
 """
@@ -20,7 +20,7 @@ import numpy as np
 from mathutils import Vector, Quaternion
 
 SEULEMENT = []          # vide = les 20
-MODE = "tous"           # "adultes", "bebes", "oeufs" ou "tous"
+MODE = "tous"           # "adultes", "bebes", "oeufs", "machine" ou "tous"
 DOSSIER = os.path.join(os.path.expanduser("~"), "dinos")
 DOSSIER_BEBES = os.path.join(os.path.expanduser("~"), "bebes")
 DOSSIER_OEUFS = os.path.join(os.path.expanduser("~"), "oeufs")
@@ -28,7 +28,7 @@ BEBE = False            # change pendant la construction
 PUPILLE = False         # ajoute une pupille noire quand l'oeil est colore
 STUDS_PAR_UNITE = 5.0
 TEXTURE = 1024
-AVEC_STUDS = {"Peau", "Rayure", "Ventre", "Accent", "Coquille", "Bande", "Tache", "Deco1", "Deco2"}
+AVEC_STUDS = {"Peau", "Rayure", "Ventre", "Accent", "Coquille", "Bande", "Tache", "Deco1", "Deco2", "Metal", "MetalFonce"}
 
 COULEURS_DE_BASE = {
     "Peau": (128, 146, 78), "Rayure": (86, 102, 54), "Ventre": (232, 228, 218),
@@ -38,6 +38,9 @@ COULEURS_DE_BASE = {
     # oeufs
     "Coquille": (236, 222, 176), "Bande": (214, 194, 140), "Tache": (196, 170, 116), "Deco1": (150, 110, 64),
     "Deco2": (120, 86, 50), "Lueur": (255, 90, 80), "Os": (244, 240, 226), "Noir": (24, 22, 22),
+    # machine
+    "Metal": (156, 166, 182), "MetalFonce": (72, 80, 96), "Danger": (250, 200, 40), "Ecran": (18, 52, 70),
+    "Bouton": (232, 62, 50), "Vitre": (170, 230, 250),
 }
 
 
@@ -993,7 +996,7 @@ def microraptor():
 # =====================================================================
 #  FINITION : fusion, ventre clair, UV, texture a studs, export
 # =====================================================================
-def finaliser(nom_fichier, couleurs, echelle, dossier=None):
+def finaliser(nom_fichier, couleurs, echelle, dossier=None, exporter=True):
     bas = min((o.matrix_world @ v.co).z for o in objets() for v in o.data.vertices)
     for o in objets():
         o.location.z -= bas
@@ -1107,6 +1110,8 @@ def finaliser(nom_fichier, couleurs, echelle, dossier=None):
     for p in me.polygons:
         p.material_index = 0
 
+    if not exporter:
+        return d
     dossier = dossier or (DOSSIER_BEBES if BEBE else DOSSIER)
     os.makedirs(dossier, exist_ok=True)
     chemin = os.path.join(dossier, nom_fichier + ".glb")
@@ -1368,6 +1373,113 @@ def construire_oeuf(oe):
     return finaliser(fichier, oe["couleurs"], 1.0, dossier=DOSSIER_OEUFS)
 
 
+# =====================================================================
+#  LA MACHINE A FOSSILES
+# =====================================================================
+COULEURS_MACHINE = theme(Lueur=(90, 245, 150))
+
+
+def machine_fossiles():
+    # socle en deux marches + bandes de danger devant
+    boite("Socle", (0, 0, 0.3), (7.4, 5.2, 0.6), "MetalFonce", biseau=0.08)
+    boite("Socle", (0, 0, 0.8), (6.4, 4.4, 0.4), "Metal", biseau=0.06)
+    n = 14
+    for k in range(n):
+        x = -3.5 + 7.0 * (k + 0.5) / n
+        boite("Danger", (x, -2.62, 0.3), (7.0 / n, 0.06, 0.45), "Danger" if k % 2 == 0 else "Noir", biseau=0)
+
+    # chambre centrale : bague du bas, piliers, chapeau
+    boite("BagueBas", (0, 0, 1.25), (2.7, 2.7, 0.5), "Metal", biseau=0.06)
+    boite("Piedestal", (0, 0, 1.6), (1.3, 1.3, 0.25), "MetalFonce", biseau=0.04)
+    boite("PiedestalLueur", (0, 0, 1.76), (1.0, 1.0, 0.08), "Lueur", biseau=0.01)
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            boite("Pilier", (sx * 1.15, sy * 1.15, 2.95), (0.38, 0.38, 3.0), "MetalFonce", biseau=0.05)
+    boite("Chapeau", (0, 0, 4.7), (2.8, 2.8, 0.6), "Metal", biseau=0.06)
+    boite("Chapeau", (0, 0, 5.15), (2.0, 2.0, 0.35), "MetalFonce", biseau=0.05)
+    boite("Antenne", (0, 0, 5.75), (0.18, 0.18, 0.9), "MetalFonce", biseau=0.02)
+    boite("Voyant", (0, 0, 6.3), (0.42, 0.42, 0.42), "Lueur", biseau=0.06)
+    # anneaux lumineux autour de la chambre
+    for z in (1.55, 4.38):
+        for sx, sy, w, l in ((0, -1, 2.3, 0.08), (0, 1, 2.3, 0.08), (-1, 0, 0.08, 2.3), (1, 0, 0.08, 2.3)):
+            boite("Anneau", (sx * 1.36, sy * 1.36, z), (w, l, 0.12), "Lueur", biseau=0)
+
+    # logo os sur le chapeau
+    y = -1.42
+    boite("LogoOs", (0, y, 4.7), (1.0, 0.06, 0.18), "Os", biseau=0)
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            boite("LogoOs", (sx * 0.52, y, 4.7 + sz * 0.1), (0.2, 0.06, 0.2), "Os", biseau=0)
+
+    # reservoirs de liquide de chaque cote
+    for sx in (-1, 1):
+        x = sx * 2.65
+        boite("Reservoir", (x, 0.5, 1.15), (1.3, 1.3, 0.3), "MetalFonce", biseau=0.04)
+        boite("Reservoir", (x, 0.5, 3.75), (1.3, 1.3, 0.3), "MetalFonce", biseau=0.04)
+        for dx in (-1, 1):
+            for dy in (-1, 1):
+                boite("MontantReservoir", (x + dx * 0.55, 0.5 + dy * 0.55, 2.45), (0.16, 0.16, 2.4), "Metal", biseau=0.02)
+        boite("Liquide", (x, 0.5, 2.3), (0.9, 0.9, 2.1), "Lueur", biseau=0.03)
+        for z in (1.8, 2.6, 3.2):
+            boite("Bulle", (x + random.uniform(-0.2, 0.2), 0.5 - 0.46, z), (0.16, 0.06, 0.16), "Vitre", biseau=0)
+        # tuyaux vers la chambre
+        for z in (1.9, 3.4):
+            boite("Tuyau", (sx * 1.75, 0.5, z), (1.0, 0.32, 0.32), "MetalFonce", biseau=0.04)
+            boite("Raccord", (sx * 1.33, 0.5, z), (0.18, 0.46, 0.46), "Metal", biseau=0.03)
+
+    # trappe d'insertion (devant a gauche) avec fleche lumineuse
+    boite("Trappe", (-2.45, -1.6, 1.55), (1.5, 1.2, 1.1), "Metal", biseau=0.08)
+    boite("Fente", (-2.45, -2.21, 1.75), (1.0, 0.04, 0.32), "Noir", biseau=0)
+    boite("Rebord", (-2.45, -2.24, 1.5), (1.1, 0.08, 0.1), "Danger", biseau=0)
+    fleche = [(-0.3, 0.55), (0.3, 0.55), (0.3, 0.25), (0.5, 0.25), (0, -0.2), (-0.5, 0.25), (-0.3, 0.25)]
+    plaque("Fleche", fleche, 0.08, "Lueur", plan="xz", decalage=(-2.45, -2.22, 2.35), biseau=0.01)
+    boite("SupportFleche", (-2.45, -1.95, 2.35), (0.25, 0.5, 0.25), "MetalFonce", biseau=0.02)
+
+    # panneau de controle (devant a droite) : ecran ADN + boutons
+    boite("Pupitre", (2.45, -1.6, 1.55), (1.5, 1.2, 1.1), "Metal", biseau=0.08)
+    boite("PupitreHaut", (2.45, -1.75, 2.25), (1.4, 0.8, 0.35), "MetalFonce", biseau=0.05, tangage=-25)
+    o = boite("Ecran", (2.45, -2.22, 1.6), (1.15, 0.05, 0.75), "Ecran", biseau=0)
+    for k in range(7):  # double helice d'ADN sur l'ecran
+        x = 2.45 - 0.42 + k * 0.14
+        dz = 0.2 * math.sin(k * 0.9)
+        boite("ADN", (x, -2.255, 1.6 + dz), (0.08, 0.02, 0.08), "Lueur", biseau=0)
+        boite("ADN", (x, -2.255, 1.6 - dz), (0.08, 0.02, 0.08), "Danger", biseau=0)
+    for k, mat in enumerate(("Bouton", "Lueur", "Danger")):
+        boite("Bouton", (2.0 + k * 0.45, -1.75, 2.48), (0.26, 0.26, 0.16), mat, biseau=0.03, tangage=-25)
+
+    # aerations a l'arriere
+    for k in range(5):
+        boite("Aeration", (-1.6 + k * 0.8, 2.22, 0.9), (0.5, 0.06, 0.14), "Noir", biseau=0)
+
+
+def construire_machine():
+    """La machine (texture a studs) + la vitre de la chambre, comme 2e piece du meme fichier :
+    dans Roblox, regle la Transparency de la piece "Vitre" (par exemple 0.6)."""
+    dossier = os.path.join(os.path.expanduser("~"), "machine")
+    nettoyer()
+    random.seed(7)
+    machine_fossiles()
+    d = finaliser("machine_fossiles", COULEURS_MACHINE, 1.0, exporter=False)
+    vitre = boite("Vitre", (0, 0, 2.95), (2.1, 2.1, 2.95), "Vitre", biseau=0.03)
+    m = bpy.data.materials.new("Vitre")  # materiau a part (celui des bulles a servi au calcul de la texture)
+    m.use_nodes = True
+    bsdf = m.node_tree.nodes["Principled BSDF"]
+    bsdf.inputs["Base Color"].default_value = lineaire(COULEURS_DE_BASE["Vitre"])
+    bsdf.inputs["Alpha"].default_value = 0.35
+    bsdf.inputs["Roughness"].default_value = 0.05
+    vitre.data.materials.clear()
+    vitre.data.materials.append(m)
+    os.makedirs(dossier, exist_ok=True)
+    chemin = os.path.join(dossier, "machine_fossiles.glb")
+    bpy.ops.object.select_all(action='DESELECT')
+    d.select_set(True)
+    vitre.select_set(True)
+    bpy.context.view_layer.objects.active = d
+    bpy.ops.export_scene.gltf(filepath=chemin, use_selection=True, export_format='GLB')
+    print("Export OK :", chemin)
+    return d
+
+
 def construire(numero, bebe=False):
     global BEBE, PUPILLE
     BEBE = bebe
@@ -1387,7 +1499,10 @@ def construire(numero, bebe=False):
 
 
 if __name__ == "__main__":
-    versions = {"adultes": [False], "bebes": [True], "oeufs": []}.get(MODE, [False, True])
+    versions = {"adultes": [False], "bebes": [True], "oeufs": [], "machine": []}.get(MODE, [False, True])
+    if MODE in ("machine", "tous"):
+        print("--- Machine a fossiles ---")
+        construire_machine()
     if MODE in ("oeufs", "tous"):
         for oe in OEUFS:
             print(f"--- {oe['nom']} ({oe['rarete']}) ---")
