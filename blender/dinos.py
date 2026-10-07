@@ -1,10 +1,12 @@
-"""20 dinos "en blocs" style Roblox (du plus commun au plus rare).
+"""30 dinos "en blocs" style Roblox (du plus commun au plus rare).
+1 a 20 : les grands dinos. 21 a 30 : les petits dinos.
 
-Utilisation : Blender > onglet "Scripting" > Open (ce fichier) > Run Script (triangle).
+Utilisation : Blender > onglet "Scripting" > Open (dinos.py) > Run Script (triangle).
 Construit chaque dino, calcule sa texture a studs, l'exporte en .glb dans
 le dossier "dinos" de ton dossier utilisateur, puis passe au suivant.
 (Compter quelques minutes pour les 20.)
 Pour n'en faire qu'un : mets son numero dans SEULEMENT, par exemple SEULEMENT = [18].
+MODE : "adultes", "bebes" (versions bebe mignonnes, dans le dossier "bebes") ou "tous".
 
 Dans Roblox Studio : Avatar > Import 3D.
 """
@@ -17,7 +19,11 @@ import numpy as np
 from mathutils import Vector, Quaternion
 
 SEULEMENT = []          # vide = les 20
+MODE = "tous"           # "adultes", "bebes" ou "tous"
 DOSSIER = os.path.join(os.path.expanduser("~"), "dinos")
+DOSSIER_BEBES = os.path.join(os.path.expanduser("~"), "bebes")
+BEBE = False            # change pendant la construction
+PUPILLE = False         # ajoute une pupille noire quand l'oeil est colore
 STUDS_PAR_UNITE = 5.0
 TEXTURE = 1024
 AVEC_STUDS = {"Peau", "Rayure", "Ventre", "Accent"}
@@ -26,7 +32,7 @@ COULEURS_DE_BASE = {
     "Peau": (128, 146, 78), "Rayure": (86, 102, 54), "Ventre": (232, 228, 218),
     "Accent": (200, 120, 60), "Corne": (236, 226, 196), "Dent": (255, 255, 255),
     "Bouche": (206, 24, 36), "Oeil": (12, 12, 14), "Reflet": (255, 255, 255),
-    "Griffe": (240, 238, 230),
+    "Griffe": (240, 238, 230), "Pupille": (12, 12, 14),
 }
 
 
@@ -235,6 +241,8 @@ class Tete:
 
 
 def tete_carnivore(base, L, H, W, dents=True, machoire=1.0, arcade=True, rainures=True, oeil=0.16):
+    if BEBE:
+        arcade, rainures, oeil = False, False, 0.25
     t = Tete(base, L, H, W)
     haut = plaque("Tete", [t.p(u, v) for u, v in TETE_CARNI_HAUT], W, "Peau", biseau=min(H, W) * 0.07, effile=t.effile)
     bas = plaque("Machoire", [t.p(u, v * machoire) for u, v in TETE_CARNI_BAS], W * 0.92, "Peau",
@@ -245,18 +253,18 @@ def tete_carnivore(base, L, H, W, dents=True, machoire=1.0, arcade=True, rainure
     if dents:
         ligne_h = [t.p(u, v) for u, v in TETE_CARNI_HAUT[6:11]]
         ligne_b = [t.p(u, v * machoire) for u, v in TETE_CARNI_BAS[0:5]][::-1]
-        r = H * 0.062
+        r = H * (0.045 if BEBE else 0.062)
         for ligne, sens, larg, dec in ((ligne_h, -1, W, 0.0), (ligne_b, 1, W * 0.92, 0.5)):
-            pas = H * 0.12
+            pas = H * (0.16 if BEBE else 0.12)
             for k, (y, z) in enumerate(le_long(ligne, pas)):
                 y -= dec * pas
                 demi = larg / 2 * t.effile(y) - r * 1.3
                 for s in (-1, 1):
-                    cone("Dent", (s * demi, y, z - sens * r * 0.4), r, H * 0.19, "Dent", (0, 0, sens))
+                    cone("Dent", (s * demi, y, z - sens * r * 0.4), r, H * (0.12 if BEBE else 0.19), "Dent", (0, 0, sens))
             y0, z0 = ligne[0]
             demi = larg / 2 * t.effile(y0) - r * 1.3
             for x in np.linspace(-demi * 0.7, demi * 0.7, 4):
-                cone("Dent", (x, y0 + r, z0 - sens * r * 0.4), r, H * 0.19, "Dent", (0, 0, sens))
+                cone("Dent", (x, y0 + r, z0 - sens * r * 0.4), r, H * (0.12 if BEBE else 0.19), "Dent", (0, 0, sens))
     yo, zo = t.p(0.42, 0.62)
     poser_yeux(haut, yo, zo, H * oeil * 1.5)
     for s in (-1, 1):
@@ -293,7 +301,7 @@ def tete_herbivore(base, L, H, W, bec=True):
         if loc:
             ellipse("Narine", loc, (W * 0.05, H * 0.06, H * 0.03), "Rayure", rot=n.to_track_quat('Z', 'Y'), seg=8, anneaux=4)
     yo, zo = t.p(0.35, 0.55)
-    poser_yeux(tete, yo, zo, H * 0.24)
+    poser_yeux(tete, yo, zo, H * (0.34 if BEBE else 0.24))
     return t
 
 
@@ -304,6 +312,9 @@ def poser_yeux(obj, y, z, taille):
             continue
         q = n.to_track_quat('Z', 'Y')
         ellipse("Oeil", loc, (taille * 0.7, taille, taille * 0.25), "Oeil", rot=q)
+        if BEBE or PUPILLE:  # grosse pupille noire (utile quand l'oeil est colore)
+            ellipse("Pupille", loc + n * taille * 0.1 + Vector((0, -taille * 0.05, -taille * 0.05)),
+                    (taille * 0.45, taille * 0.65, taille * 0.2), "Pupille", rot=q)
         ellipse("Reflet", loc + n * taille * 0.2 + Vector((0, -taille * 0.2, taille * 0.4)),
                 (taille * 0.2, taille * 0.24, taille * 0.08), "Reflet", rot=q, seg=8, anneaux=4)
 
@@ -402,8 +413,33 @@ def bras(x, y, z, taille, griffes=2, griffe=0.18, pouce=0.0):
         cone("Pouce", (x * 1.03, ya - l * 0.3, za + w * 0.4), pouce * 0.35, pouce, "Griffe", (0, -0.6, 1))
 
 
+def proportions_bebe(d, quadrupede=False):
+    """Grosse tete, corps court, petites pattes, queue courte."""
+    if not BEBE:
+        return d
+    d = dict(d)
+    L, H, W = d["tete"]
+    d["tete"] = (L * 1.25, H * 1.5, W * 1.45)
+    w, l, h = d["corps"]
+    d["corps"] = (w, l * 0.78, h * 0.95)
+    cl, cw, ch, ca = d["cou"]
+    d["cou"] = (cl * (0.7 if d.get("cou_n", 1) > 1 else 0.5), cw, ch, ca)
+    qn, ql, qr, qa, qc = d["queue"]
+    d["queue"] = (qn, ql * 0.6, qr, qa, qc)
+    if quadrupede:
+        d["hauteur"] = d["hauteur"] * 0.75
+        if "hauteur_pattes" in d:
+            d["hauteur_pattes"] = tuple(x * 0.7 for x in d["hauteur_pattes"])
+    else:
+        d["hauteur"] = d["hauteur"] * 0.8
+        cw_, cl_, ch_ = d["cuisse"]
+        d["cuisse"] = (cw_, cl_, ch_ * 0.85)
+    return d
+
+
 def corps_bipede(d):
     """Corps generique de bipede. Renvoie un dict avec les pieces utiles."""
+    d = proportions_bebe(d)
     w, l, h = d["corps"]
     hz = d["hauteur"]
     corps = boite("Corps", (0, 0, hz), (w, l, h), "Peau", avant=(0.92, 0.92))
@@ -414,7 +450,7 @@ def corps_bipede(d):
     base = (bout.y + L * 0.06, bout.z - H * 0.3)
     if d.get("type_tete", "carni") == "carni":
         tete = tete_carnivore(base, L, H, W, machoire=d.get("machoire", 1.0), arcade=d.get("arcade", True),
-                              rainures=d.get("rainures", True))
+                              rainures=d.get("rainures", True), oeil=d.get("oeil", 0.16))
     else:
         tete = tete_herbivore(base, L, H, W, bec=d.get("bec", True))
     qn, ql, qr, qa, qc = d["queue"]
@@ -431,7 +467,32 @@ def corps_bipede(d):
     return {"corps": corps, "cou": cou, "tete": tete, "queue": queue, "fin_queue": fin, "w": w, "l": l, "h": h, "hz": hz}
 
 
+def aile_plumes(cote, base, envergure, profondeur, mat="Accent", pointes=6):
+    """Aile a plumes vue de dessus (bord arriere en dents de scie)."""
+    pts = [(0, 0), (envergure * 0.5, -profondeur * 0.12), (envergure, profondeur * 0.05)]
+    for k in range(pointes + 1):
+        x = envergure * (1 - k / pointes)
+        y = profondeur * (0.35 + 0.65 * k / pointes)
+        pts.append((x, y + (0.18 * profondeur if k % 2 else 0)))
+    pts.append((0, profondeur * 0.8))
+    # retire les doublons du coin
+    propre = [pts[0]]
+    for q in pts[1:]:
+        if (q[0] - propre[-1][0]) ** 2 + (q[1] - propre[-1][1]) ** 2 > 1e-4:
+            propre.append(q)
+    return plaque("Aile", [(cote * x, y) for x, y in propre], 0.08, mat, plan="xy", decalage=base, biseau=0.02)
+
+
+def eventail(point, n, longueur, mat="Accent", ouverture=70):
+    """Eventail de plumes (bout de queue)."""
+    for k in range(n):
+        a = math.radians(-ouverture / 2 + ouverture * k / max(1, n - 1))
+        cone("Plume", Vector(point), longueur * 0.22, longueur, mat, (math.sin(a), math.cos(a), 0.05),
+             echelle=(1, 1, 0.25))
+
+
 def corps_quadrupede(d):
+    d = proportions_bebe(d, quadrupede=True)
     w, l, h = d["corps"]
     hz = d["hauteur"]
     corps = boite("Corps", (0, 0, hz), (w, l, h), "Peau", avant=d.get("avant", (0.92, 0.9)))
@@ -656,7 +717,8 @@ def pteranodon():
     hz = 2.4
     corps = boite("Corps", (0, 0, hz), (1.1, 1.8, 1.1), "Peau")
     cou, bout = segments("Cou", (0, -0.8, hz + 0.2), 1, 0.9, 0.6, 0.6, 0.9, 30, 0, vers_avant=True)
-    tt = tete_herbivore((bout.y + 0.1, bout.z - 0.1), 1.0, 0.75, 0.7, bec=False)
+    L, H, W = (1.35, 1.1, 1.05) if BEBE else (1.0, 0.75, 0.7)
+    tt = tete_herbivore((bout.y + 0.1, bout.z - 0.1), L, H, W, bec=False)
     y, z = tt.p(1.0, 0.1)
     boite("Bec", (0, y - 0.6, z), (0.35, 1.6, 0.35), "Corne", avant=(0.3, 0.3))
     y, z = tt.p(0.1, 0.8)
@@ -775,6 +837,154 @@ def indominus():
                 cone("PiqueCote", loc, 0.15, 0.4, "Corne", (s, 0.4, 0.3))
 
 
+# ---------------------------------------------------------------------
+#  LES PETITS DINOS (21 a 30)
+# ---------------------------------------------------------------------
+@dino(21, "Eoraptor", "Commun", 0.4, t(Peau=(176, 112, 82), Rayure=(122, 72, 50)))
+def eoraptor():
+    corps_bipede(dict(corps=(1.6, 2.3, 1.5), hauteur=2.3, cou=(1.1, 0.9, 0.9, 40), tete=(1.6, 0.85, 1.0),
+                      queue=(3, 1.5, 0.7, 4, 3), cuisse=(0.7, 1.1, 1.2), tibia=0.45, pied=(0.65, 0.9, 0.32),
+                      bras=(0.25, 0.45, 0.6), doigts=3, griffe=0.16, griffe_main=0.12, bandes=2, arcade=False,
+                      rainures=False))
+
+
+@dino(22, "Microceratus", "Commun", 0.35,
+      t(Peau=(186, 188, 92), Rayure=(132, 134, 58), Accent=(110, 166, 78), Corne=(240, 230, 196)))
+def microceratus():
+    b = corps_quadrupede(dict(corps=(1.6, 2.0, 1.3), hauteur=1.5, cou=(0.5, 1.0, 0.9, 15), tete=(1.3, 0.85, 1.1),
+                              queue=(2, 1.0, 0.65, 0, -4), patte=0.45, bandes=2))
+    tt = b["tete"]
+    y, z = tt.p(0.05, 0.7)
+    plaque("Collerette", [(-0.75, -0.15), (-0.8, 0.35), (-0.45, 0.7), (0, 0.8), (0.45, 0.7), (0.8, 0.35), (0.75, -0.15)],
+           0.14, "Accent", plan="xz", decalage=(0, y + 0.08, z - 0.15), biseau=0.03)
+    yn, zn = tt.p(0.88, 0.6)
+    cone("CorneNez", (0, yn, zn), 0.09, 0.22, "Corne", (0, -0.5, 1), sommets=6)
+
+
+@dino(23, "Hypsilophodon", "Commun", 0.45,
+      t(Peau=(112, 172, 132), Rayure=(70, 120, 88), Corne=(226, 210, 160)))
+def hypsilophodon():
+    corps_bipede(dict(corps=(1.6, 2.4, 1.5), hauteur=2.7, cou=(1.0, 0.9, 0.9, 40), tete=(1.3, 0.8, 0.9),
+                      type_tete="herbi", queue=(4, 1.4, 0.75, 2, 1), cuisse=(0.8, 1.3, 1.4), tibia=0.5,
+                      pied=(0.7, 1.0, 0.32), bras=(0.22, 0.45, 0.55), doigts=3, griffe=0.16, griffe_main=0.1, bandes=3))
+
+
+@dino(24, "Psittacosaurus", "Peu commun", 0.5,
+      t(Peau=(222, 164, 92), Rayure=(166, 112, 58), Accent=(92, 70, 52), Corne=(70, 56, 46)))
+def psittacosaurus():
+    b = corps_bipede(dict(corps=(1.8, 2.4, 1.7), hauteur=2.5, cou=(0.8, 1.1, 1.1, 30), tete=(1.4, 1.1, 1.3),
+                          type_tete="herbi", queue=(3, 1.4, 0.7, 4, 2), cuisse=(0.85, 1.4, 1.5), tibia=0.55,
+                          pied=(0.8, 1.1, 0.35), bras=(0.3, 0.5, 0.65), doigts=3, griffe=0.18, bandes=2))
+    # piquants sur la queue
+    piques_dos(1.4, 4.5, 0.22, 0.55, 0.3, cibles=[q[0] for q in b["queue"]], largeur=0.15, inclinaison=0.4,
+               mat="Accent", sommets=4)
+    tt = b["tete"]
+    for s in (-1, 1):
+        y, z = tt.p(0.25, 0.1)
+        cone("Joue", (s * tt.demi_largeur(0.25) * 0.95, y, z), 0.12, 0.35, "Corne", (s, 0.2, -0.2), sommets=4)
+
+
+@dino(25, "Oviraptor", "Peu commun", 0.55,
+      t(Peau=(112, 132, 176), Rayure=(76, 92, 132), Accent=(244, 142, 60), Corne=(250, 220, 120)))
+def oviraptor():
+    b = corps_bipede(dict(corps=(1.8, 2.4, 1.7), hauteur=2.8, cou=(1.2, 0.9, 0.9, 45), tete=(1.3, 1.0, 1.0),
+                          type_tete="herbi", queue=(3, 1.4, 0.72, 4, 2), cuisse=(0.85, 1.4, 1.5), tibia=0.55,
+                          pied=(0.8, 1.1, 0.35), bras=(0.3, 0.75, 0.75), doigts=3, griffe=0.18, griffe_main=0.18,
+                          bandes=3))
+    tt = b["tete"]
+    pts = [tt.p(u, v) for u, v in ((0.25, 0.9), (0.4, 1.9), (0.62, 2.0), (0.85, 1.4), (0.92, 0.75), (0.6, 0.95))]
+    plaque("Crete", pts, 0.16, "Accent", biseau=0.03)
+    eventail(b["fin_queue"] + Vector((0, -0.2, 0)), 5, 1.1)
+    for s in (-1, 1):
+        cone("PlumeBras", (s * 1.05, -1.0, 2.6), 0.3, 0.9, "Accent", (s * 0.3, 1, -0.6), echelle=(0.25, 1, 1))
+
+
+@dino(26, "Minmi", "Rare", 0.45,
+      t(Peau=(170, 140, 92), Rayure=(122, 96, 60), Accent=(232, 212, 164), Corne=(240, 232, 206)))
+def minmi():
+    b = corps_quadrupede(dict(corps=(2.2, 2.4, 1.3), hauteur=1.5, avant=(0.85, 0.85), cou=(0.4, 1.1, 0.9, 5),
+                              tete=(1.1, 0.7, 1.2), queue=(3, 1.0, 0.6, -2, 0), patte=0.45, bandes=0,
+                              hauteur_pattes=(1.15, 1.15)))
+    for y in np.linspace(-0.9, 0.9, 4):
+        for x in np.linspace(-0.75, 0.75, 3):
+            loc, n = toucher(b["corps"], (x, y, 50), (0, 0, -1))
+            if loc:
+                boite("Ecaille", (x, y, loc.z + 0.04), (0.42, 0.36, 0.18), "Accent")
+    for s in (-1, 1):
+        for y in np.linspace(-0.9, 1.0, 4):
+            cone("PiqueCote", (s * 1.1, y, 1.6), 0.15, 0.4, "Corne", (s, 0.3, 0.1))
+    piques_dos(1.2, 3.6, 0.45, 0.35, 0.2, cibles=[q[0] for q in b["queue"]], mat="Corne", largeur=0.6)
+
+
+@dino(27, "Troodon", "Rare", 0.5,
+      t(Peau=(66, 108, 82), Rayure=(40, 70, 52), Accent=(244, 210, 70), Ventre=(226, 232, 206), Oeil=(250, 200, 40)))
+def troodon():
+    b = corps_bipede(dict(corps=(1.6, 2.3, 1.5), hauteur=2.6, cou=(1.1, 0.85, 0.85, 45), tete=(1.6, 0.85, 1.0),
+                          queue=(4, 1.3, 0.75, 0, -1), cuisse=(0.8, 1.3, 1.4), tibia=0.5, pied=(0.75, 1.1, 0.35),
+                          bras=(0.28, 0.75, 0.75), doigts=3, griffe=0.2, griffe_main=0.18, ergot=True, bandes=3,
+                          rainures=False, oeil=0.24))
+    tt = b["tete"]
+    for k, u in enumerate((0.0, 0.12)):
+        y, z = tt.p(u, 0.9)
+        cone("Plume", (0, y + 0.1, z), 0.2, 0.55 - k * 0.1, "Accent", (0, 1, 0.8), echelle=(0.35, 1, 1))
+    eventail(b["fin_queue"] + Vector((0, -0.2, 0)), 3, 0.8)
+
+
+@dino(28, "Archaeopteryx", "Epique", 0.5,
+      t(Peau=(58, 82, 116), Rayure=(30, 42, 64), Accent=(92, 176, 226), Ventre=(214, 226, 240), Corne=(240, 200, 80)))
+def archaeopteryx():
+    b = corps_bipede(dict(corps=(1.4, 2.0, 1.4), hauteur=2.4, cou=(0.9, 0.8, 0.8, 50), tete=(1.2, 0.75, 0.85),
+                          queue=(5, 1.0, 0.8, 0, 0), cuisse=(0.7, 1.1, 1.2), tibia=0.4, pied=(0.6, 0.8, 0.28),
+                          bras=(0.22, 0.4, 0.5), doigts=3, griffe=0.14, griffe_main=0.14, bandes=2,
+                          rainures=False))
+    hz, w, l = b["hz"], b["w"], b["l"]
+    for s in (-1, 1):
+        aile_plumes(s, (s * w * 0.45, -l * 0.25, hz + 0.25), 3.2, 1.5)
+        cone("BoutAile", (s * 3.5, -l * 0.25, hz + 0.25), 0.08, 0.4, "Rayure", (s, -0.3, 0))
+    # plumes de chaque cote de la queue
+    for o, c, ww, hh in b["queue"]:
+        for s in (-1, 1):
+            cone("PlumeQueue", c + Vector((s * ww * 0.4, 0, 0)), 0.18, 0.8, "Accent", (s, 0.6, 0), echelle=(1, 1, 0.25))
+    eventail(b["fin_queue"] + Vector((0, -0.1, 0)), 5, 1.0)
+
+
+@dino(29, "Dracorex", "Legendaire", 0.6,
+      t(Peau=(132, 92, 176), Rayure=(88, 58, 128), Accent=(90, 60, 136), Corne=(244, 232, 200), Oeil=(80, 240, 120)))
+def dracorex():
+    b = corps_bipede(dict(corps=(1.9, 2.4, 1.8), hauteur=2.6, cou=(0.9, 1.3, 1.2, 30), tete=(1.5, 1.1, 1.3),
+                          type_tete="herbi", queue=(3, 1.5, 0.7, 4, 2), cuisse=(0.9, 1.5, 1.6), tibia=0.65,
+                          pied=(0.9, 1.2, 0.4), bras=(0.3, 0.5, 0.65), doigts=3, griffe=0.2, bandes=3))
+    tt = b["tete"]
+    y, z = tt.p(0.4, 0.95)
+    ellipse("Dome", (0, y, z), (tt.W * 0.42, tt.L * 0.35, tt.H * 0.4), "Accent", seg=10, anneaux=6)
+    # cornes de dragon autour du crane et sur le museau
+    for s in (-1, 1):
+        for u, v, l, d in ((0.05, 0.85, 0.9, (s * 0.5, 1, 0.5)), (0.15, 0.7, 0.7, (s * 0.8, 0.8, 0.2)),
+                           (0.3, 0.5, 0.5, (s, 0.5, 0)), (0.75, 0.75, 0.4, (s * 0.3, -0.3, 1)),
+                           (0.6, 0.85, 0.35, (s * 0.3, 0, 1))):
+            yy, zz = tt.p(u, v)
+            cone("Corne", (s * tt.demi_largeur(u) * 0.8, yy, zz), l * 0.25, l, "Corne", d, sommets=5)
+    piques_dos(-1.0, 3.5, 0.4, 0.4, 0.2, largeur=0.4)
+
+
+@dino(30, "Microraptor", "Mythique", 0.5,
+      t(Peau=(34, 36, 48), Rayure=(66, 44, 130), Accent=(70, 90, 230), Ventre=(80, 84, 110), Oeil=(255, 196, 40),
+        Griffe=(220, 220, 240)))
+def microraptor():
+    b = corps_bipede(dict(corps=(1.4, 2.0, 1.3), hauteur=2.4, cou=(0.9, 0.8, 0.8, 45), tete=(1.4, 0.75, 0.85),
+                          queue=(5, 1.1, 0.8, 0, 0), cuisse=(0.7, 1.1, 1.2), tibia=0.4, pied=(0.6, 0.9, 0.28),
+                          bras=(0.22, 0.4, 0.5), doigts=3, griffe=0.16, griffe_main=0.14, ergot=True, bandes=3,
+                          rainures=False, oeil=0.22))
+    hz, w, l = b["hz"], b["w"], b["l"]
+    for s in (-1, 1):
+        aile_plumes(s, (s * w * 0.45, -l * 0.3, hz + 0.25), 3.0, 1.4)          # ailes avant
+        aile_plumes(s, (s * w * 0.4, l * 0.15, hz - 0.45), 2.0, 1.2, mat="Rayure", pointes=4)  # ailes arriere
+    for k, u in enumerate((0.0, 0.12, 0.24)):
+        y, z = b["tete"].p(u, 0.9)
+        cone("Plume", (0, y + 0.1, z), 0.2, 0.6 - k * 0.12, "Accent", (0, 1, 0.8), echelle=(0.35, 1, 1))
+    eventail(b["fin_queue"] + Vector((0, -0.1, 0)), 3, 1.3, ouverture=40)
+
+
 # =====================================================================
 #  FINITION : fusion, ventre clair, UV, texture a studs, export
 # =====================================================================
@@ -891,8 +1101,9 @@ def finaliser(nom_fichier, couleurs, echelle):
     for p in me.polygons:
         p.material_index = 0
 
-    os.makedirs(DOSSIER, exist_ok=True)
-    chemin = os.path.join(DOSSIER, nom_fichier + ".glb")
+    dossier = DOSSIER_BEBES if BEBE else DOSSIER
+    os.makedirs(dossier, exist_ok=True)
+    chemin = os.path.join(dossier, nom_fichier + ".glb")
     activer(d)
     bpy.ops.export_scene.gltf(filepath=chemin, use_selection=True, export_format='GLB')
     nb = sum(len(p.vertices) - 2 for p in me.polygons)
@@ -900,19 +1111,29 @@ def finaliser(nom_fichier, couleurs, echelle):
     return d
 
 
-def construire(numero):
+def construire(numero, bebe=False):
+    global BEBE, PUPILLE
+    BEBE = bebe
     for num, nom, rarete, echelle, couleurs, f in DINOS:
         if num == numero:
             nettoyer()
             random.seed(num)
+            PUPILLE = num > 20 and sum(couleurs["Oeil"]) > 150
             f()
             fichier = f"{num:02d}_{nom.replace(' ', '_').replace('-', '_')}"
-            return finaliser(fichier, couleurs, echelle)
+            if bebe:
+                fichier = "bebe_" + fichier
+                echelle *= 0.5
+            d = finaliser(fichier, couleurs, echelle)
+            BEBE = False
+            return d
 
 
 if __name__ == "__main__":
-    for num, nom, rarete, *_ in DINOS:
-        if SEULEMENT and num not in SEULEMENT:
-            continue
-        print(f"--- {num:02d} {nom} ({rarete}) ---")
-        construire(num)
+    versions = {"adultes": [False], "bebes": [True]}.get(MODE, [False, True])
+    for bebe in versions:
+        for num, nom, rarete, *_ in DINOS:
+            if SEULEMENT and num not in SEULEMENT:
+                continue
+            print(f"--- {num:02d} {nom} ({rarete}){' bebe' if bebe else ''} ---")
+            construire(num, bebe)
