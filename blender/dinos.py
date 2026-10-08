@@ -1942,6 +1942,194 @@ def construire_outil(ou):
     return finaliser(fichier, ou["couleurs"], 1.0, dossier=os.path.join(os.path.expanduser("~"), "outils"))
 
 
+# =====================================================================
+#  FINITION "LISSE" (raretes hautes) : le corps en blocs devient une peau lisse,
+#  les couleurs des blocs sont recopiees dessus (bake "selected to active").
+# =====================================================================
+DETAILS = ("Dent", "Oeil", "Reflet", "Pupille", "Narine", "Griffe", "Ongle", "Pointe", "Pique", "Corne", "Gemme",
+           "Ergot", "Plume", "Pouce", "Eclat", "Cristal", "BoutMeche", "Flamme", "Etoile")
+
+
+def _est_detail(o):
+    return o.name.split(".")[0].startswith(DETAILS) or o.type != 'MESH'
+
+
+def _joindre(objs, nom):
+    bpy.ops.object.select_all(action='DESELECT')
+    for o in objs:
+        o.select_set(True)
+    bpy.context.view_layer.objects.active = objs[0]
+    if len(objs) > 1:
+        bpy.ops.object.join()
+    j = bpy.context.active_object
+    j.name = nom
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    return j
+
+
+def _copier(objs):
+    res = []
+    for o in objs:
+        c = o.copy()
+        c.data = o.data.copy()
+        lier(c)
+        res.append(c)
+    return res
+
+
+def finaliser_lisse(nom_fichier, couleurs, echelle, dossier=None, max_triangles=14000):
+    bas = min((o.matrix_world @ v.co).z for o in objets() for v in o.data.vertices)
+    S = Matrix.Scale(echelle, 4)
+    for o in objets():
+        o.location.z -= bas
+        o.matrix_world = S @ o.matrix_world
+    originaux = objets()
+    corps = [o for o in originaux if not _est_detail(o)]
+    details = [o for o in originaux if _est_detail(o)]
+
+    # 1) la peau lisse : copies du corps fusionnees, refaites en voxels puis adoucies
+    cible = _joindre(_copier(corps), nom_fichier)
+    dims = cible.dimensions
+    for nom, reglages in (("REMESH", dict(mode='VOXEL', voxel_size=max(dims) / 100)),
+                          ("SMOOTH", dict(factor=1.0, iterations=18))):
+        mod = cible.modifiers.new(nom, nom)
+        for k, v in reglages.items():
+            setattr(mod, k, v)
+        activer(cible)
+        bpy.ops.object.modifier_apply(modifier=mod.name)
+    # enleve les petits morceaux isoles (rainures trop fines pour les voxels)
+    bm = bmesh.new()
+    bm.from_mesh(cible.data)
+    bm.verts.ensure_lookup_table()
+    vus, morceaux = set(), []
+    for v in bm.verts:
+        if v.index in vus:
+            continue
+        pile, groupe = [v], []
+        vus.add(v.index)
+        while pile:
+            x = pile.pop()
+            groupe.append(x)
+            for e in x.link_edges:
+                o = e.other_vert(x)
+                if o.index not in vus:
+                    vus.add(o.index)
+                    pile.append(o)
+        morceaux.append(groupe)
+    grand = max(len(g) for g in morceaux)
+    a_suppr = [v for g in morceaux if len(g) < grand * 0.02 for v in g]
+    if a_suppr:
+        bmesh.ops.delete(bm, geom=a_suppr, context='VERTS')
+    bm.to_mesh(cible.data)
+    bm.free()
+    nb = sum(len(p.vertices) - 2 for p in cible.data.polygons)
+    budget = max_triangles - sum(sum(len(p.vertices) - 2 for p in o.data.polygons) for o in details)
+    if nb > budget:
+        mod = cible.modifiers.new("Dec", 'DECIMATE')
+        mod.ratio = max(0.05, budget / nb)
+        activer(cible)
+        bpy.ops.object.modifier_apply(modifier=mod.name)
+    if details:
+        det = _joindre(_copier(details), "details")
+        bpy.ops.object.select_all(action='DESELECT')
+        det.select_set(True)
+        cible.select_set(True)
+        bpy.context.view_layer.objects.active = cible
+        bpy.ops.object.join()
+    me = cible.data
+    me.materials.clear()
+    for p in me.polygons:
+        p.use_smooth = True
+    while me.uv_layers:
+        me.uv_layers.remove(me.uv_layers[0])
+    me.uv_layers.new(name="UV")
+    activer(cible)
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.004)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    # 2) la source : les blocs d'origine avec leurs couleurs (ventre clair dessous)
+    src = _joindre(originaux, "source")
+    sme = src.data
+    noms = [m.name.split(".")[0] for m in sme.materials]
+    if "Ventre" not in noms:
+        sme.materials.append(matiere("Ventre"))
+        noms.append("Ventre")
+    for slot in sme.materials:
+        nom = slot.name.split(".")[0]
+        nt = slot.node_tree
+        nt.nodes.clear()
+        out = nt.nodes.new("ShaderNodeOutputMaterial")
+        em = nt.nodes.new("ShaderNodeEmission")
+        em.inputs["Color"].default_value = lineaire(couleurs[nom])
+        nt.links.new(em.outputs[0], out.inputs["Surface"])
+
+    # 3) bake des couleurs de la source vers la peau lisse
+    img = bpy.data.images.new("bake_lisse", TEXTURE, TEXTURE, alpha=False, float_buffer=True)
+    m = bpy.data.materials.new(nom_fichier)
+    m.use_nodes = True
+    tex = m.node_tree.nodes.new("ShaderNodeTexImage")
+    tex.image = img
+    m.node_tree.nodes.active = tex
+    me.materials.append(m)
+    scene = bpy.context.scene
+    scene.render.engine = 'CYCLES'
+    scene.cycles.device = 'CPU'
+    scene.cycles.samples = 1
+    bpy.ops.object.select_all(action='DESELECT')
+    src.select_set(True)
+    cible.select_set(True)
+    bpy.context.view_layer.objects.active = cible
+    taille = max(cible.dimensions)
+    bpy.ops.object.bake(type='EMIT', use_selected_to_active=True, cage_extrusion=taille * 0.02,
+                        max_ray_distance=taille * 0.06, margin=4, use_clear=True)
+    a = np.empty(TEXTURE * TEXTURE * 4, dtype=np.float32)
+    img.pixels.foreach_get(a)
+    c = np.clip(a.reshape(TEXTURE, TEXTURE, 4)[..., :3], 0, 1)
+
+    # ventre clair en degrade : la ou la peau regarde vers le bas
+    nt = m.node_tree
+    geo = nt.nodes.new("ShaderNodeNewGeometry")
+    em = nt.nodes.new("ShaderNodeEmission")
+    nt.links.new(geo.outputs["Normal"], em.inputs["Color"])
+    nt.links.new(em.outputs[0], nt.nodes["Material Output"].inputs["Surface"])
+    bpy.ops.object.select_all(action='DESELECT')
+    cible.select_set(True)
+    bpy.context.view_layer.objects.active = cible
+    bpy.ops.object.bake(type='EMIT', margin=4, use_clear=True)
+    nz = np.empty(TEXTURE * TEXTURE * 4, dtype=np.float32)
+    img.pixels.foreach_get(nz)
+    nz = nz.reshape(TEXTURE, TEXTURE, 4)[..., 2]
+    peau = np.array(lineaire(couleurs["Peau"])[:3])
+    ventre = np.array(lineaire(couleurs["Ventre"])[:3])
+    proche = np.clip(1 - np.linalg.norm(c - peau, axis=-1) / 0.12, 0, 1)
+    f = (np.clip((-nz - 0.2) / 0.45, 0, 1) * proche)[..., None]
+    c = c * (1 - f) + ventre * f
+    nt.nodes.remove(geo)
+    nt.nodes.remove(em)
+    rgb = np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1 / 2.4) - 0.055)
+    rgba = np.concatenate([rgb, np.ones((TEXTURE, TEXTURE, 1))], axis=-1).astype(np.float32)
+    final_img = bpy.data.images.new(nom_fichier, TEXTURE, TEXTURE, alpha=False)
+    final_img.pixels.foreach_set(rgba.ravel())
+    final_img.pack()
+    tex.image = final_img
+    bsdf = m.node_tree.nodes["Principled BSDF"]
+    bsdf.inputs["Roughness"].default_value = 0.4
+    m.node_tree.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    bpy.data.images.remove(img)
+    bpy.data.objects.remove(src, do_unlink=True)
+
+    dossier = dossier or DOSSIER
+    os.makedirs(dossier, exist_ok=True)
+    chemin = os.path.join(dossier, nom_fichier + ".glb")
+    activer(cible)
+    bpy.ops.export_scene.gltf(filepath=chemin, use_selection=True, export_format='GLB')
+    nb = sum(len(p.vertices) - 2 for p in me.polygons)
+    print(f"Export OK : {chemin} ({nb} triangles, lisse)")
+    return cible
+
+
 def construire(numero, bebe=False):
     global BEBE, PUPILLE
     BEBE = bebe
