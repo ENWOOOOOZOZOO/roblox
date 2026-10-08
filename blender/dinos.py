@@ -21,7 +21,7 @@ import numpy as np
 from mathutils import Vector, Quaternion, Matrix
 
 SEULEMENT = []          # vide = les 20
-MODE = "tous"           # "adultes", "bebes", "oeufs", "machine", "outils" ou "tous"
+MODE = "tous"           # "adultes", "bebes", "oeufs", "oeufs50", "machine", "outils", "nouveaux" ou "tous"
 DOSSIER = os.path.join(os.path.expanduser("~"), "dinos")
 DOSSIER_BEBES = os.path.join(os.path.expanduser("~"), "bebes")
 DOSSIER_OEUFS = os.path.join(os.path.expanduser("~"), "oeufs")
@@ -2016,7 +2016,9 @@ def lisser_poids(obj, iterations=4):
             vg.add([int(i)], float(col[i]), 'REPLACE')
 
 
-def finaliser_lisse(nom_fichier, couleurs, echelle, dossier=None, max_triangles=14000, squelette_os=None):
+def finaliser_lisse(nom_fichier, couleurs, echelle, dossier=None, max_triangles=14000, squelette_os=None,
+                    facettes=False):
+    """facettes=True : grandes facettes nettes (style low-poly massif) au lieu d'une peau toute ronde."""
     bas = min((o.matrix_world @ v.co).z for o in objets() for v in o.data.vertices)
     S = Matrix.Scale(echelle, 4)
     for o in objets():
@@ -2030,7 +2032,7 @@ def finaliser_lisse(nom_fichier, couleurs, echelle, dossier=None, max_triangles=
     cible = _joindre(_copier(corps), nom_fichier)
     dims = cible.dimensions
     for nom, reglages in (("REMESH", dict(mode='VOXEL', voxel_size=max(dims) / 100)),
-                          ("SMOOTH", dict(factor=1.0, iterations=18))):
+                          ("SMOOTH", dict(factor=1.0, iterations=10 if facettes else 18))):
         mod = cible.modifiers.new(nom, nom)
         for k, v in reglages.items():
             setattr(mod, k, v)
@@ -2063,6 +2065,8 @@ def finaliser_lisse(nom_fichier, couleurs, echelle, dossier=None, max_triangles=
     bm.free()
     nb = sum(len(p.vertices) - 2 for p in cible.data.polygons)
     budget = max_triangles - sum(sum(len(p.vertices) - 2 for p in o.data.polygons) for o in details)
+    if facettes:
+        budget = min(budget, 2400)
     if nb > budget:
         mod = cible.modifiers.new("Dec", 'DECIMATE')
         mod.ratio = max(0.05, budget / nb)
@@ -2078,7 +2082,7 @@ def finaliser_lisse(nom_fichier, couleurs, echelle, dossier=None, max_triangles=
     me = cible.data
     me.materials.clear()
     for p in me.polygons:
-        p.use_smooth = True
+        p.use_smooth = not facettes
     while me.uv_layers:
         me.uv_layers.remove(me.uv_layers[0])
     me.uv_layers.new(name="UV")
@@ -2996,6 +3000,13 @@ def construire_genere(g):
             d["arcade"] = False
         if rang >= 3:
             d["bandes"] = max(d.get("bandes", 0), 3) if base not in ("ankylo", "ankylo_petit", "stego") else 0
+        if rang >= 4 and base in ("rex", "thero", "raptor"):  # gros bras et grosses griffes, style kaiju
+            bw, bl, bh = d["bras"]
+            d["bras"] = (bw * 1.6, bl * 1.3, bh * 1.4)
+            d["griffe_main"] = d.get("griffe_main", 0.2) * 2.0
+            d["doigts"] = 3
+            cw, cl, ch = d["cuisse"]
+            d["cuisse"] = (cw * 1.15, cl * 1.1, ch * 1.05)
         b = corps_bipede(d) if base in FAMILLES_BIPEDES else corps_quadrupede(d)
         fam_e = base
     for nom_deco in decos:
@@ -3014,7 +3025,8 @@ def construire_genere(g):
         slug = slug.replace(a_, b_)
     fichier = f"{g['numero']:03d}_{slug}"
     if rar in LISSE:
-        res = finaliser_lisse(fichier, couleurs, echelle, squelette_os=os_)
+        # Epique : peau ronde. Legendaire et plus : grandes facettes, style massif
+        res = finaliser_lisse(fichier, couleurs, echelle, squelette_os=os_, facettes=rang >= 4)
     else:
         res = finaliser(fichier, couleurs, echelle, squelette_os=os_)
     OEIL_X, PUPILLE = 1.0, False
@@ -3155,6 +3167,389 @@ def creer_armature(os_, decalage_z, echelle, mesh):
     return ob
 
 
+# =====================================================================
+#  50 OEUFS : chacun contient 3 ou 4 dinos, les 180 dinos sont repartis
+# =====================================================================
+# Themes visuels : couleurs de coquille, motif, socle et decors
+THEMES_OEUFS = {
+    "sable": dict(c=dict(Coquille=(238, 222, 176), Bande=(222, 200, 148), Tache=(204, 178, 120), Deco1=(176, 132, 74),
+                         Deco2=(140, 100, 56)), socle="nid", decors=["crane"]),
+    "prairie": dict(c=dict(Coquille=(170, 214, 120), Bande=(130, 180, 90), Tache=(250, 240, 160), Deco1=(90, 170, 70),
+                           Deco2=(60, 130, 50)), socle="herbe", decors=["feuilles"]),
+    "fougere": dict(c=dict(Coquille=(120, 170, 100), Bande=(80, 130, 70), Tache=(200, 230, 150), Deco1=(60, 140, 60),
+                           Deco2=(40, 100, 40)), socle="herbe", decors=["feuilles", "lianes"]),
+    "argile": dict(c=dict(Coquille=(210, 140, 100), Bande=(180, 110, 76), Tache=(236, 190, 150), Deco1=(160, 100, 70),
+                          Deco2=(120, 76, 54)), socle="roche", decors=["rochers"]),
+    "galet": dict(c=dict(Coquille=(190, 196, 204), Bande=(150, 156, 168), Tache=(230, 232, 236), Deco1=(140, 144, 150),
+                         Deco2=(110, 114, 120)), socle="roche", decors=["rochers"]),
+    "mousse": dict(c=dict(Coquille=(150, 180, 110), Bande=(110, 140, 80), Tache=(90, 120, 70), Deco1=(110, 160, 80),
+                          Deco2=(80, 70, 50)), socle="nid", decors=["feuilles"]),
+    "terre": dict(c=dict(Coquille=(170, 120, 80), Bande=(130, 90, 60), Tache=(210, 170, 120), Deco1=(120, 84, 56),
+                         Deco2=(90, 64, 44)), socle="nid", decors=["os"]),
+    "paille": dict(c=dict(Coquille=(240, 226, 150), Bande=(220, 196, 110), Tache=(250, 240, 200), Deco1=(220, 190, 100),
+                          Deco2=(180, 150, 70)), socle="nid", decors=[]),
+    "marais": dict(c=dict(Coquille=(92, 156, 150), Bande=(60, 112, 108), Tache=(166, 210, 120), Deco1=(108, 128, 60),
+                          Deco2=(70, 110, 150), Lueur=(120, 82, 50)), socle="eau", decors=["roseaux"]),
+    "riviere": dict(c=dict(Coquille=(140, 190, 230), Bande=(90, 150, 210), Tache=(230, 240, 250), Deco1=(150, 150, 160),
+                           Deco2=(70, 130, 200), Lueur=(120, 82, 50)), socle="eau", decors=["rochers", "roseaux"]),
+    "savane": dict(c=dict(Coquille=(236, 196, 110), Bande=(200, 150, 70), Tache=(150, 100, 50), Deco1=(200, 180, 90),
+                          Deco2=(160, 130, 60)), socle="herbe", decors=["os"]),
+    "bambou": dict(c=dict(Coquille=(200, 230, 150), Bande=(140, 190, 90), Tache=(100, 160, 70), Deco1=(130, 180, 80),
+                          Deco2=(90, 140, 60), Lueur=(120, 170, 80)), socle="herbe", decors=["roseaux", "feuilles"]),
+    "desert": dict(c=dict(Coquille=(244, 210, 150), Bande=(230, 170, 100), Tache=(200, 120, 70), Deco1=(110, 170, 90),
+                          Deco2=(200, 170, 120)), socle="roche", decors=["cactus", "crane"]),
+    "ambre": dict(c=dict(Coquille=(240, 170, 50), Bande=(200, 120, 30), Tache=(255, 220, 120), Deco1=(150, 100, 50),
+                         Deco2=(110, 70, 40), Lueur=(255, 200, 80), Gemme=(255, 190, 60)), socle="roche",
+                  decors=["cristaux"]),
+    "canyon": dict(c=dict(Coquille=(196, 120, 84), Bande=(160, 90, 62), Tache=(226, 168, 120), Deco1=(150, 140, 130),
+                          Deco2=(110, 102, 96)), socle="roche", decors=["fissures", "rochers"]),
+    "grotte": dict(c=dict(Coquille=(110, 110, 130), Bande=(80, 80, 100), Tache=(150, 220, 255), Deco1=(90, 90, 110),
+                          Deco2=(60, 60, 76), Lueur=(130, 220, 255), Gemme=(130, 220, 255)), socle="roche",
+                   decors=["cristaux", "lueurs"]),
+    "glace": dict(c=dict(Coquille=(196, 228, 248), Bande=(140, 196, 236), Tache=(250, 252, 255), Deco1=(248, 250, 255),
+                         Deco2=(228, 238, 248), Lueur=(110, 220, 255), Gemme=(150, 230, 255)), socle="neige",
+                  decors=["cristaux", "lueurs"]),
+    "jade": dict(c=dict(Coquille=(80, 180, 130), Bande=(250, 210, 90), Tache=(150, 230, 180), Deco1=(60, 150, 100),
+                        Deco2=(250, 210, 90), Lueur=(160, 255, 200), Gemme=(140, 255, 190)), socle="or",
+                 decors=["gemmes", "cristaux"]),
+    "rubis": dict(c=dict(Coquille=(200, 40, 60), Bande=(250, 200, 70), Tache=(255, 120, 130), Deco1=(130, 20, 40),
+                         Deco2=(250, 200, 70), Lueur=(255, 90, 110), Gemme=(255, 60, 90)), socle="or",
+                  decors=["gemmes", "cristaux"]),
+    "orage": dict(c=dict(Coquille=(110, 100, 170), Bande=(236, 236, 250), Tache=(80, 70, 140), Deco1=(244, 244, 252),
+                         Deco2=(206, 210, 230), Lueur=(255, 226, 60)), socle="nuage", decors=["eclairs"]),
+    "lave": dict(c=dict(Coquille=(34, 26, 28), Bande=(108, 24, 26), Tache=(150, 30, 30), Deco1=(108, 24, 26),
+                        Deco2=(54, 34, 34), Lueur=(255, 110, 50), Gemme=(255, 140, 40)), socle="lave",
+                 decors=["flammes", "lueurs"]),
+    "neon": dict(c=dict(Coquille=(30, 30, 46), Bande=(255, 60, 220), Tache=(60, 255, 200), Deco1=(60, 255, 200),
+                        Deco2=(40, 40, 60), Lueur=(60, 255, 200), Gemme=(255, 60, 220)), socle="vide",
+                 decors=["lueurs", "piques"]),
+    "toxique": dict(c=dict(Coquille=(50, 60, 46), Bande=(140, 255, 60), Tache=(100, 200, 50), Deco1=(140, 255, 60),
+                           Deco2=(40, 50, 40), Lueur=(140, 255, 60), Gemme=(170, 255, 80)), socle="eau",
+                    decors=["lueurs", "bulles"]),
+    "abysses": dict(c=dict(Coquille=(30, 54, 110), Bande=(20, 36, 78), Tache=(60, 220, 230), Deco1=(250, 110, 140),
+                           Deco2=(250, 170, 80), Lueur=(80, 240, 255), Gemme=(80, 240, 255)), socle="corail",
+                    decors=["coraux", "lueurs"]),
+    "aurore": dict(c=dict(Coquille=(90, 200, 190), Bande=(170, 100, 230), Tache=(150, 255, 210), Deco1=(220, 240, 255),
+                          Deco2=(150, 200, 240), Lueur=(140, 255, 210), Gemme=(220, 140, 255)), socle="neige",
+                   decors=["cristaux", "etoiles"]),
+    "amethyste": dict(c=dict(Coquille=(140, 80, 200), Bande=(200, 150, 250), Tache=(90, 50, 140), Deco1=(110, 70, 160),
+                             Deco2=(70, 50, 100), Lueur=(220, 170, 255), Gemme=(200, 130, 255)), socle="cristal",
+                      decors=["cristaux", "gemmes"]),
+    "soleil": dict(c=dict(Coquille=(250, 200, 70), Bande=(255, 150, 40), Tache=(255, 240, 160), Deco1=(250, 220, 120),
+                          Deco2=(230, 150, 50), Lueur=(255, 236, 140), Gemme=(255, 120, 40)), socle="or",
+                   decors=["rayons", "halo"]),
+    "lune": dict(c=dict(Coquille=(200, 210, 240), Bande=(130, 140, 200), Tache=(240, 244, 255), Deco1=(60, 66, 110),
+                        Deco2=(40, 44, 80), Lueur=(220, 230, 255), Gemme=(180, 200, 255)), socle="vide",
+                 decors=["etoiles", "halo"]),
+    "dragon": dict(c=dict(Coquille=(150, 26, 34), Bande=(40, 20, 24), Tache=(250, 200, 70), Deco1=(200, 50, 50),
+                          Deco2=(90, 16, 24), Lueur=(255, 170, 40), Gemme=(255, 170, 40), Corne=(240, 220, 180)),
+                   socle="lave", decors=["ailes_dragon", "cornes", "flammes"]),
+    "phenix": dict(c=dict(Coquille=(255, 140, 40), Bande=(255, 210, 80), Tache=(255, 80, 40), Deco1=(255, 200, 70),
+                          Deco2=(200, 60, 30), Lueur=(255, 220, 90), Gemme=(255, 90, 30)), socle="lave",
+                   decors=["ailes_plumes", "flammes", "halo"]),
+    "titan": dict(c=dict(Coquille=(120, 126, 140), Bande=(240, 190, 50), Tache=(70, 76, 90), Deco1=(190, 196, 210),
+                         Deco2=(70, 76, 90), Lueur=(255, 220, 90), Gemme=(255, 220, 90)), socle="or",
+                  decors=["armure", "gemmes", "piques"]),
+    "kraken": dict(c=dict(Coquille=(60, 40, 110), Bande=(30, 20, 60), Tache=(120, 255, 220), Deco1=(110, 70, 170),
+                          Deco2=(40, 30, 80), Lueur=(120, 255, 220), Gemme=(120, 255, 220)), socle="corail",
+                   decors=["tentacules", "lueurs"]),
+    "galaxie": dict(c=dict(Coquille=(30, 24, 70), Bande=(150, 80, 230), Tache=(255, 240, 160), Deco1=(70, 50, 130),
+                           Deco2=(30, 24, 60), Lueur=(255, 240, 170), Gemme=(255, 120, 220)), socle="vide",
+                    decors=["etoiles", "anneau", "lueurs"]),
+    "demon": dict(c=dict(Coquille=(40, 20, 24), Bande=(120, 16, 24), Tache=(210, 30, 40), Deco1=(210, 30, 40),
+                         Deco2=(30, 20, 20), Lueur=(255, 200, 40), Gemme=(255, 200, 40), Corne=(30, 20, 20)),
+                  socle="lave", decors=["ailes_dragon", "cornes", "chaines", "couronne"]),
+    "golem": dict(c=dict(Coquille=(190, 140, 50), Bande=(40, 36, 34), Tache=(220, 170, 60), Deco1=(40, 36, 34),
+                         Deco2=(150, 110, 40), Lueur=(255, 220, 90), Gemme=(255, 220, 90)), socle="or",
+                  decors=["armure", "noyau", "piques"]),
+    "vide": dict(c=dict(Coquille=(22, 24, 48), Bande=(12, 12, 28), Tache=(60, 70, 140), Deco1=(60, 70, 140),
+                        Deco2=(20, 22, 40), Lueur=(120, 240, 255), Gemme=(120, 240, 255)), socle="vide",
+                 decors=["noyau", "fissures_lueur", "anneau"]),
+    "cristal_rose": dict(c=dict(Coquille=(236, 150, 215), Bande=(180, 80, 180), Tache=(255, 210, 245),
+                                Deco1=(250, 190, 240), Deco2=(170, 80, 170), Lueur=(255, 200, 250),
+                                Gemme=(255, 170, 240)), socle="cristal", decors=["cristaux", "ailes_dragon", "gemmes"]),
+    "divin": dict(c=dict(Coquille=(250, 248, 240), Bande=(240, 200, 80), Tache=(255, 236, 150), Deco1=(255, 220, 100),
+                         Deco2=(240, 200, 80), Lueur=(255, 236, 150), Gemme=(255, 255, 255), Accent=(255, 220, 100)),
+                  socle="nuage", decors=["ailes_plumes", "halo", "anneau", "gemmes", "couronne"]),
+    "arcenciel": dict(c=dict(Coquille=(250, 250, 255), Bande=(240, 70, 80), Tache=(80, 160, 250), Deco1=(250, 210, 60),
+                             Deco2=(80, 220, 120), Lueur=(190, 100, 240), Gemme=(80, 160, 250)), socle="nuage",
+                      decors=["arcenciel", "etoiles", "halo"]),
+}
+
+# Les 50 oeufs : (nom, theme), du plus simple au plus fou
+NOMS_OEUFS = [
+    ("Oeuf de Sable", "sable"), ("Oeuf de Prairie", "prairie"), ("Oeuf de Fougere", "fougere"),
+    ("Oeuf d'Argile", "argile"), ("Oeuf de Galet", "galet"), ("Oeuf de Mousse", "mousse"), ("Oeuf de Terre", "terre"),
+    ("Oeuf de Paille", "paille"), ("Oeuf du Marais", "marais"), ("Oeuf de Riviere", "riviere"),
+    ("Oeuf de Savane", "savane"), ("Oeuf de Bambou", "bambou"), ("Oeuf du Desert", "desert"),
+    ("Oeuf d'Ambre", "ambre"), ("Oeuf de Canyon", "canyon"), ("Oeuf de la Grotte", "grotte"),
+    ("Oeuf des Fossiles", "terre"), ("Oeuf de Glace", "glace"), ("Oeuf de Jade", "jade"), ("Oeuf de Rubis", "rubis"),
+    ("Oeuf d'Orage", "orage"), ("Oeuf des Cimes", "galet"), ("Oeuf de la Jungle Sauvage", "fougere"),
+    ("Oeuf des Dunes", "desert"), ("Oeuf du Glacier", "glace"), ("Oeuf de Lave", "lave"), ("Oeuf Neon", "neon"),
+    ("Oeuf Toxique", "toxique"), ("Oeuf des Abysses", "abysses"), ("Oeuf d'Aurore", "aurore"),
+    ("Oeuf d'Amethyste", "amethyste"), ("Oeuf de Tempete", "orage"), ("Oeuf du Soleil", "soleil"),
+    ("Oeuf de Lune", "lune"), ("Oeuf du Dragon", "dragon"), ("Oeuf du Phenix", "phenix"), ("Oeuf du Titan", "titan"),
+    ("Oeuf du Kraken", "kraken"), ("Oeuf du Volcan Ancien", "lave"), ("Oeuf Galactique", "galaxie"),
+    ("Oeuf du Golem", "golem"), ("Oeuf Demoniaque", "demon"), ("Oeuf de Cristal Rose", "cristal_rose"),
+    ("Oeuf des Profondeurs", "kraken"), ("Oeuf du Vide", "vide"), ("Oeuf Eternel", "galaxie"),
+    ("Oeuf de l'Infini", "vide"), ("Oeuf Arc-en-ciel", "arcenciel"), ("Oeuf Celeste", "divin"), ("Oeuf Divin", "divin"),
+]
+assert len(NOMS_OEUFS) == 50
+
+
+def tous_les_dinos():
+    """Les 180 dinos (numero, nom, rarete), classes du plus commun au plus rare."""
+    liste = [(num, nom, rar) for num, nom, rar, *_ in DINOS] + [(g["numero"], g["nom"], g["rarete"]) for g in GENERES]
+    return sorted(liste, key=lambda x: (RARETES.index(x[2]), x[0]))
+
+
+def _arrondi(x):
+    """Garde 2 chiffres significatifs : 2 534 -> 2 500."""
+    e = 10 ** max(0, int(math.log10(x)) - 1)
+    return int(round(x / e) * e)
+
+
+def repartir_oeufs():
+    """30 oeufs de 4 dinos puis 20 oeufs de 3 : les 180 dinos, chacun dans un seul oeuf."""
+    dinos = tous_les_dinos()
+    tailles = [4] * 30 + [3] * 20
+    assert sum(tailles) == len(dinos) == 180
+    chances = {4: [50, 30, 15, 5], 3: [60, 30, 10]}
+    oeufs, i = [], 0
+    for k, n in enumerate(tailles):
+        groupe = dinos[i:i + n]
+        i += n
+        nom, theme_ = NOMS_OEUFS[k]
+        oeufs.append(dict(numero=k + 1, nom=nom, theme=theme_, rarete=groupe[0][2],
+                          prix=_arrondi(100 * 1.38 ** k),
+                          dinos=[(d[0], d[1], d[2], c) for d, c in zip(groupe, chances[n])]))
+    return oeufs
+
+
+# ---------- decors d'oeufs ----------
+def _autour(n, rayon, z, decal=0.0):
+    for k in range(n):
+        a = 2 * math.pi * k / n + decal
+        yield a, Vector((rayon * math.cos(a), rayon * math.sin(a), z))
+
+
+def socle_oeuf(sorte, R_):
+    if sorte == "nid":
+        nid_batons(14, R_ * 1.05, 0.35, 2.2, "Deco1", "Deco2")
+        nid_batons(10, R_ * 0.7, 0.55, 1.6, "Deco2", "Deco1")
+    elif sorte == "herbe":
+        socle(R_ * 1.05, 0.45, "Deco2")
+    elif sorte == "eau":
+        socle(R_ * 1.3, 0.35, "Deco2", n=2)
+    elif sorte == "roche":
+        socle(R_ * 1.1, 0.45, "Deco2")
+        for _ in range(12):
+            a = R.uniform(0, 2 * math.pi)
+            r = R.uniform(R_ * 0.9, R_ * 1.3)
+            t_ = R.uniform(0.35, 0.75)
+            boite("Rocher", (r * math.cos(a), r * math.sin(a), 0.4 + t_ / 2), (t_, t_ * 1.2, t_), R.choice(("Deco1", "Deco2")),
+                  lacet=R.uniform(0, 90))
+    elif sorte == "neige":
+        socle(R_ * 1.15, 0.5, "Deco1", n=2)
+    elif sorte == "nuage":
+        for a, p in _autour(16, R_ * 1.2, 0.45):
+            t_ = R.uniform(0.6, 1.0)
+            boite("Nuage", p, (t_ * 1.3, t_, t_ * 0.8), R.choice(("Deco1", "Deco2")), biseau=0.15, lacet=math.degrees(a))
+    elif sorte == "corail":
+        socle(R_ * 1.15, 0.5, "Bande", n=2)
+    elif sorte == "lave":
+        socle(R_ * 1.2, 0.5, "Deco2", n=2)
+        for a, p in _autour(10, R_ * 1.15, 0.52):
+            boite("Fissure", p, (0.5, 0.14, 0.06), "Lueur", biseau=0, lacet=math.degrees(a))
+    elif sorte == "or":
+        socle(R_ * 1.15, 0.5, "Deco2", n=2)
+        socle(R_ * 0.95, 0.75, "Deco1")
+    elif sorte == "vide":
+        socle(R_ * 1.15, 0.45, "Deco2", n=2)
+        for a, p in _autour(12, R_ * 1.25, 0.47):
+            boite("Lueur", p, (0.25, 0.25, 0.08), "Lueur", biseau=0)
+    elif sorte == "cristal":
+        socle(R_ * 1.1, 0.45, "Deco2", n=2)
+        eclats(8, R_ * 1.1, 0.4, 1.6, "Gemme", "Deco1", inclinaison=20, largeur=0.4)
+
+
+def decor_oeuf(nom, c, R_, H, bas, force):
+    """force : de 0 (oeuf simple) a 1 (oeuf le plus fou)."""
+    haut = bas + H
+    if nom == "crane":
+        crane_fossile(c, bas + H * 0.35)
+    elif nom == "os":
+        for a, p in _autour(4, R_ * 1.15, 0.6, 0.4):
+            boite("Os", p, (0.9, 0.22, 0.22), "Os", biseau=0.05, lacet=math.degrees(a) + 90)
+            for s in (-1, 1):
+                ellipse("Os", p + Vector((-math.sin(a), math.cos(a), 0)) * 0.45 * s, (0.17, 0.17, 0.17), "Os", seg=6,
+                        anneaux=4)
+    elif nom == "feuilles":
+        for k in range(9):
+            feuille(2 * math.pi * k / 9, R_ * 0.6, 0.5, 1.8, "Deco1" if k % 2 else "Deco2")
+    elif nom == "lianes":
+        for k in range(3):
+            a = 2 * math.pi * k / 3 + 0.4
+            for z in np.linspace(bas + 0.4, haut - 0.6, 6):
+                aa = a + z * 0.4
+                loc, _ = toucher(c, (math.cos(aa) * 20, math.sin(aa) * 20, z), (-math.cos(aa), -math.sin(aa), 0))
+                if loc:
+                    boite("Liane", loc, (0.22, 0.22, 0.42), "Deco2", biseau=0.03)
+    elif nom == "roseaux":
+        for a, p in _autour(10, R_ * 1.25, 0, 0.2):
+            h = R.uniform(1.6, 2.6)
+            boite("Roseau", p + Vector((0, 0, h / 2)), (0.14, 0.14, h), "Deco1", biseau=0.02)
+            boite("Massette", p + Vector((0, 0, h - 0.1)), (0.24, 0.24, 0.55), "Lueur", biseau=0.04)
+    elif nom == "rochers":
+        pass  # deja dans le socle "roche"
+    elif nom == "cactus":
+        for a, p in _autour(3, R_ * 1.25, 0.4, 1.2):
+            boite("Cactus", p + Vector((0, 0, 0.8)), (0.4, 0.4, 1.6), "Deco1", biseau=0.06)
+            boite("Cactus", p + Vector((0.35, 0, 1.0)), (0.3, 0.3, 0.6), "Deco1", biseau=0.05)
+    elif nom == "cristaux":
+        blocs_surface(c, int(6 + 10 * force), 0.3, "Gemme", bas + 0.4, haut - 0.4, saillie=0.6)
+        eclats(int(6 + 4 * force), R_ * 1.1, 0.35, 1.4 + force, "Gemme", "Lueur", inclinaison=22, largeur=0.42)
+    elif nom == "lueurs":
+        blocs_surface(c, int(8 + 12 * force), 0.28, "Lueur", bas + 0.4, haut - 0.3, saillie=0.6)
+    elif nom == "gemmes":
+        for a, p in _autour(6, R_ * 0.98, bas + H * 0.45):
+            loc, n = toucher(c, (math.cos(a) * 20, math.sin(a) * 20, bas + H * 0.45), (-math.cos(a), -math.sin(a), 0))
+            if loc:
+                gemme(loc, 0.25, "Gemme")
+    elif nom == "fissures":
+        for a0 in (0.3, 2.4, 4.2):
+            z, a = bas + 0.5, a0
+            while z < haut - 0.4:
+                d = Vector((math.cos(a), math.sin(a), 0))
+                loc, _ = toucher(c, Vector((0, 0, z)) + d * 20, -d)
+                if loc:
+                    boite("Fissure", loc, (0.14, 0.14, 0.36), "Noir", biseau=0)
+                z += 0.3
+                a += R.choice((-0.12, 0.12))
+    elif nom == "fissures_lueur":
+        for a0 in (0.3, 1.5, 2.6, 3.8, 5.0):
+            z, a = bas + 0.4, a0
+            while z < haut - 0.3:
+                d = Vector((math.cos(a), math.sin(a), 0))
+                loc, _ = toucher(c, Vector((0, 0, z)) + d * 20, -d)
+                if loc:
+                    boite("Fissure", loc, (0.14, 0.14, 0.36), "Lueur", biseau=0)
+                z += 0.3
+                a += R.choice((-0.15, 0.15))
+    elif nom == "eclairs":
+        for a in (0.2, 2.3, 4.3):
+            eclair(R_ * 1.15 * math.cos(a), R_ * 1.15 * math.sin(a), bas + 0.9, math.degrees(a) + 90, 1.6, "Lueur")
+    elif nom == "flammes":
+        eclats(int(6 + 4 * force), R_ * 1.1, 0.3, 1.8 + force, "Lueur", "Deco1", inclinaison=18, largeur=0.5)
+    elif nom == "coraux":
+        for a, p in _autour(7, R_ * 1.1, 0.5, 0.3):
+            mat = "Deco1" if int(a * 10) % 2 else "Deco2"
+            h = R.uniform(1.0, 1.8)
+            boite("Corail", p + Vector((0, 0, h / 2)), (0.3, 0.3, h), mat, biseau=0.04)
+            for s in (-1, 1):
+                boite("Branche", p + Vector((s * 0.3 * math.sin(a), -s * 0.3 * math.cos(a), h * 0.75)),
+                      (0.22, 0.22, h * 0.5), mat, biseau=0.03)
+    elif nom == "bulles":
+        for _ in range(10):
+            a = R.uniform(0, 2 * math.pi)
+            r = R.uniform(R_ * 1.1, R_ * 1.4)
+            ellipse("Bulle", (r * math.cos(a), r * math.sin(a), R.uniform(0.6, haut)), (0.18,) * 3, "Lueur", seg=8,
+                    anneaux=6)
+    elif nom == "etoiles":
+        for _ in range(int(10 + 10 * force)):
+            a = R.uniform(0, 2 * math.pi)
+            r = R.uniform(R_ * 1.25, R_ * 1.7)
+            boite("Etoile", (r * math.cos(a), r * math.sin(a), R.uniform(0.8, haut + 0.5)), (0.22, 0.22, 0.22), "Lueur",
+                  biseau=0, lacet=45, roulis=45)
+    elif nom in ("halo", "anneau"):
+        z = haut + 0.9 if nom == "halo" else bas + H * 0.45
+        r = R_ * 0.6 if nom == "halo" else R_ * 1.45
+        n = 14 if nom == "halo" else 22
+        for a, p in _autour(n, r, z):
+            boite("Halo", p, (0.35, 0.3, 0.14), "Lueur", biseau=0.02, lacet=math.degrees(a))
+    elif nom == "rayons":
+        for a, p in _autour(12, R_ * 1.3, bas + H * 0.5):
+            o = cone("Rayon", p, 0.25, 1.2, "Lueur", (math.cos(a), math.sin(a), 0.2), sommets=4)
+    elif nom == "cornes":
+        for s in (-1, 1):
+            for k, (dx, dz, h) in enumerate(((0.45, haut + 0.1, 0.9), (0.65, haut + 0.8, 0.8), (0.75, haut + 1.45, 0.7))):
+                boite("Corne", (s * dx, 0, dz), (0.45, 0.45, h), "Deco1" if k < 2 else "Lueur", biseau=0.04,
+                      roulis=s * (12 + k * 10))
+    elif nom == "couronne":
+        z = haut - 0.1
+        boite("Couronne", (0, 0, z), (1.2, 1.2, 0.35), "Deco1", biseau=0.04)
+        for a, p in _autour(6, 0.5, z + 0.3):
+            cone("Pointe", p, 0.14, 0.5, "Deco1", (0, 0, 1), sommets=4)
+        gemme((0, -0.62, z), 0.16, "Gemme")
+    elif nom == "chaines":
+        for s in (-1, 1):
+            for k in range(10):
+                t_ = k / 9
+                a = s * 1.2 + t_ * 2.5
+                z = bas + 0.5 + t_ * (H - 1)
+                loc, _ = toucher(c, (math.cos(a) * 20, math.sin(a) * 20, z), (-math.cos(a), -math.sin(a), 0))
+                if loc:
+                    boite("Chaine", loc, (0.18, 0.32, 0.18) if k % 2 else (0.18, 0.18, 0.32), "Noir", biseau=0.03)
+    elif nom == "ailes_dragon":
+        for s in (-1, 1):
+            aile_dragon(s, (s * R_ * 0.6, 0.1, bas + H * 0.45), 1.2, "Deco1", "Deco2")
+    elif nom == "ailes_plumes":
+        for s in (-1, 1):
+            aile_plumes_v(s, (s * R_ * 0.6, 0.1, bas + H * 0.4), 1.25, "Deco1", "Gemme")
+    elif nom == "armure":
+        for z in (bas + H * 0.3, bas + H * 0.62):
+            loc, _ = toucher(c, (0, 0, 50), (0, 0, -1))
+            k = R_ * 2.08 * math.sqrt(max(0.1, 1 - ((z - bas) / H - 0.42) ** 2 / 0.35))
+            boite("Bande", (0, 0, z), (k, k * 0.72, 0.3), "Deco1", biseau=0.04)
+            boite("Bande", (0, 0, z), (k * 0.72, k, 0.3), "Deco1", biseau=0.04)
+    elif nom == "noyau":
+        loc, n = toucher(c, (0, -20, bas + H * 0.45), (0, 1, 0))
+        if loc:
+            gemme(loc + Vector((0, -0.1, 0)), 0.5, "Lueur")
+    elif nom == "piques":
+        for a, p in _autour(8, R_ * 0.9, bas + H * 0.55):
+            loc, n = toucher(c, (math.cos(a) * 20, math.sin(a) * 20, bas + H * 0.55), (-math.cos(a), -math.sin(a), 0))
+            if loc:
+                cone("Pique", loc, 0.22, 0.8, "Deco1", (math.cos(a), math.sin(a), 0.4), sommets=4)
+    elif nom == "tentacules":
+        for a, p in _autour(6, R_ * 0.95, 0.4, 0.3):
+            q = p.copy()
+            for k in range(5):
+                q = q + Vector((math.cos(a) * 0.35, math.sin(a) * 0.35, 0.25 + k * 0.05))
+                boite("Tentacule", q, (0.42 - k * 0.06,) * 3, "Deco1", biseau=0.05)
+    elif nom == "arcenciel":
+        couleurs_ = ("Bande", "Deco1", "Deco2", "Tache", "Lueur", "Gemme")
+        for k, m in enumerate(couleurs_):
+            for a, p in _autour(10, R_ * 1.15 + k * 0.18, 0.4 + k * 0.05, k * 0.1):
+                boite("Arc", p, (0.5, 0.25, 0.16), m, biseau=0.02, lacet=math.degrees(a))
+
+
+def construire_oeuf_genere(oe):
+    global R
+    nettoyer()
+    R = random.Random(500 + oe["numero"])
+    th = THEMES_OEUFS[oe["theme"]]
+    couleurs = theme(th["c"])
+    k = (oe["numero"] - 1) / 49  # 0 -> 1 : de plus en plus gros et charge
+    H = 3.4 + 1.4 * k
+    R_ = 1.4 + 0.45 * k
+    bas = 0.45 if th["socle"] != "nuage" else 0.7
+    motif = oe["numero"] % 4
+    bande = [lambda i: "Bande" if i % 3 == 1 else "Coquille", lambda i: "Bande" if i % 2 else "Coquille",
+             lambda i: "Bande" if i in (3, 4, 8, 9) else "Coquille", lambda i: "Bande" if i % 4 == 2 else "Coquille"][motif]
+    c = coquille(H, R_, 11 + int(3 * k), bas=bas, bande=bande)
+    blocs_surface(c, int(14 + 14 * k), 0.3 + 0.1 * k, "Tache", bas + 0.4, bas + H - 0.2)
+    blocs_surface(c, int(10 + 10 * k), 0.3, "Coquille", bas + 0.4, bas + H - 0.2)
+    socle_oeuf(th["socle"], R_)
+    for nom in th["decors"]:
+        decor_oeuf(nom, c, R_, H, bas, k)
+    slug = oe["nom"].lower()
+    for a_, b_ in (("'", ""), ("-", "_"), (" ", "_")):
+        slug = slug.replace(a_, b_)
+    return finaliser(f"oeuf_{oe['numero']:02d}_{slug}", couleurs, 1.0,
+                     dossier=os.path.join(os.path.expanduser("~"), "oeufs50"))
+
+
 def construire(numero, bebe=False):
     global BEBE, PUPILLE
     BEBE = bebe
@@ -3174,7 +3569,18 @@ def construire(numero, bebe=False):
 
 
 if __name__ == "__main__":
-    versions = {"adultes": [False], "bebes": [True], "oeufs": [], "machine": [], "outils": []}.get(MODE, [False, True])
+    versions = {"adultes": [False], "bebes": [True], "oeufs": [], "machine": [], "outils": [], "oeufs50": [],
+                "nouveaux": []}.get(MODE, [False, True])
+    if MODE in ("oeufs50", "tous"):
+        for oe in repartir_oeufs():
+            print(f"--- {oe['nom']} ({oe['rarete']}) ---")
+            construire_oeuf_genere(oe)
+    if MODE in ("nouveaux", "tous"):
+        for g in GENERES:
+            if SEULEMENT and g["numero"] not in SEULEMENT:
+                continue
+            print(f"--- {g['numero']} {g['nom']} ({g['rarete']}) ---")
+            construire_genere(g)
     if MODE in ("outils", "tous"):
         for ou in OUTILS:
             if SEULEMENT and ou["numero"] not in SEULEMENT:
