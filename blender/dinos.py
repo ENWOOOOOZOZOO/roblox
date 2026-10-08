@@ -27,6 +27,7 @@ DOSSIER_BEBES = os.path.join(os.path.expanduser("~"), "bebes")
 DOSSIER_OEUFS = os.path.join(os.path.expanduser("~"), "oeufs")
 BEBE = False            # change pendant la construction
 PUPILLE = False         # ajoute une pupille noire quand l'oeil est colore
+OEIL_X = 1.0            # taille des yeux (plus grand = plus mignon)
 STUDS_PAR_UNITE = 5.0
 TEXTURE = 1024
 AVEC_STUDS = {"Peau", "Rayure", "Ventre", "Accent", "Coquille", "Bande", "Tache", "Deco1", "Deco2", "Metal", "MetalFonce",
@@ -319,6 +320,7 @@ def tete_herbivore(base, L, H, W, bec=True):
 
 
 def poser_yeux(obj, y, z, taille):
+    taille *= OEIL_X
     for s in (-1, 1):
         loc, n = toucher(obj, (s * 30, y, z), (-s, 0, 0))
         if loc is None:
@@ -477,7 +479,8 @@ def corps_bipede(d):
     if d.get("bandes", 3):
         bandes_corps(corps, (0, 0, hz), w, h, l, n=d.get("bandes", 3))
         bandes(queue, tous_les=1)
-    return {"corps": corps, "cou": cou, "tete": tete, "queue": queue, "fin_queue": fin, "w": w, "l": l, "h": h, "hz": hz}
+    return {"corps": corps, "cou": cou, "tete": tete, "queue": queue, "fin_queue": fin, "w": w, "l": l, "h": h, "hz": hz,
+            "d": d}
 
 
 def aile_plumes(cote, base, envergure, profondeur, mat="Accent", pointes=6):
@@ -529,7 +532,8 @@ def corps_quadrupede(d):
     if d.get("bandes", 3):
         bandes_corps(corps, (0, 0, hz), w, h, l, n=d.get("bandes", 3))
         bandes(queue)
-    return {"corps": corps, "cou": cou, "tete": tete, "queue": queue, "fin_queue": fin, "w": w, "l": l, "h": h, "hz": hz}
+    return {"corps": corps, "cou": cou, "tete": tete, "queue": queue, "fin_queue": fin, "w": w, "l": l, "h": h, "hz": hz,
+            "d": d}
 
 
 # =====================================================================
@@ -743,8 +747,6 @@ def pteranodon():
         boite("Jambe", (s * 0.35, 0.9, hz - 0.75), (0.22, 0.22, 1.1), "Peau", tangage=-35)
         cone("Griffe", (s * 0.35, 1.25, hz - 1.3), 0.06, 0.2, "Griffe", (0, 1, -1))
     piques_dos(-0.6, 0.6, 0.4, 0.3, 0.25, cibles=[corps], largeur=0.3)
-    boite("Socle", (0, 0.3, 0.3), (1.6, 1.6, 0.6), "Rayure")
-    boite("Tige", (0, 0.3, 1.2), (0.25, 0.25, 1.6), "Rayure", biseau=0.04)
 
 
 @dino(14, "Carnotaurus", "Epique", 1.1,
@@ -1001,7 +1003,7 @@ def microraptor():
 # =====================================================================
 #  FINITION : fusion, ventre clair, UV, texture a studs, export
 # =====================================================================
-def finaliser(nom_fichier, couleurs, echelle, dossier=None, exporter=True):
+def finaliser(nom_fichier, couleurs, echelle, dossier=None, exporter=True, squelette_os=None):
     bas = min((o.matrix_world @ v.co).z for o in objets() for v in o.data.vertices)
     for o in objets():
         o.location.z -= bas
@@ -1012,7 +1014,8 @@ def finaliser(nom_fichier, couleurs, echelle, dossier=None, exporter=True):
     bpy.ops.object.join()
     d = bpy.context.active_object
     d.name = nom_fichier
-    d.scale = (echelle,) * 3
+    # mise a l'echelle depuis l'origine du monde (comme le squelette)
+    d.matrix_world = Matrix.Scale(echelle, 4) @ d.matrix_world
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
     me = d.data
 
@@ -1121,6 +1124,10 @@ def finaliser(nom_fichier, couleurs, echelle, dossier=None, exporter=True):
     os.makedirs(dossier, exist_ok=True)
     chemin = os.path.join(dossier, nom_fichier + ".glb")
     activer(d)
+    if squelette_os:
+        arm = creer_armature(squelette_os, bas, echelle, d)
+        d.select_set(True)
+        arm.select_set(True)
     bpy.ops.export_scene.gltf(filepath=chemin, use_selection=True, export_format='GLB')
     nb = sum(len(p.vertices) - 2 for p in me.polygons)
     print(f"Export OK : {chemin} ({nb} triangles)")
@@ -1947,7 +1954,10 @@ def construire_outil(ou):
 #  les couleurs des blocs sont recopiees dessus (bake "selected to active").
 # =====================================================================
 DETAILS = ("Dent", "Oeil", "Reflet", "Pupille", "Narine", "Griffe", "Ongle", "Pointe", "Pique", "Corne", "Gemme",
-           "Ergot", "Plume", "Pouce", "Eclat", "Cristal", "BoutMeche", "Flamme", "Etoile")
+           "Ergot", "Plume", "Pouce", "Eclat", "Cristal", "BoutMeche", "Flamme", "Etoile",
+           # pieces fines ou detachees : on les garde nettes (le lissage les ferait disparaitre)
+           "Halo", "Aureole", "Chaine", "Fissure", "Couronne", "Lance", "Aile", "Baleine", "Nageoire",
+           "Palme", "Aileron", "Visiere", "Boulon")
 
 
 def _est_detail(o):
@@ -1977,7 +1987,36 @@ def _copier(objs):
     return res
 
 
-def finaliser_lisse(nom_fichier, couleurs, echelle, dossier=None, max_triangles=14000):
+def lisser_poids(obj, iterations=4):
+    """Adoucit les poids des os aux articulations (chaque sommet prend la moyenne de ses voisins)."""
+    me = obj.data
+    nv, ng = len(me.vertices), len(obj.vertex_groups)
+    if ng == 0 or nv == 0:
+        return
+    W = np.zeros((nv, ng), dtype=np.float32)
+    for v in me.vertices:
+        for g in v.groups:
+            W[v.index, g.group] = g.weight
+    e = np.empty(len(me.edges) * 2, dtype=np.int32)
+    me.edges.foreach_get("vertices", e)
+    e = e.reshape(-1, 2)
+    deg = np.bincount(e.ravel(), minlength=nv).astype(np.float32)[:, None]
+    for _ in range(iterations):
+        somme = np.zeros_like(W)
+        np.add.at(somme, e[:, 0], W[e[:, 1]])
+        np.add.at(somme, e[:, 1], W[e[:, 0]])
+        voisins = np.where(deg > 0, somme / np.maximum(deg, 1), W)
+        W = 0.5 * W + 0.5 * voisins
+    W /= np.maximum(W.sum(axis=1, keepdims=True), 1e-6)
+    for gi, vg in enumerate(obj.vertex_groups):
+        col = W[:, gi]
+        nz = np.nonzero(col > 0.01)[0]
+        vg.remove(list(range(nv)))
+        for i in nz:
+            vg.add([int(i)], float(col[i]), 'REPLACE')
+
+
+def finaliser_lisse(nom_fichier, couleurs, echelle, dossier=None, max_triangles=14000, squelette_os=None):
     bas = min((o.matrix_world @ v.co).z for o in objets() for v in o.data.vertices)
     S = Matrix.Scale(echelle, 4)
     for o in objets():
@@ -2108,6 +2147,7 @@ def finaliser_lisse(nom_fichier, couleurs, echelle, dossier=None, max_triangles=
     c = c * (1 - f) + ventre * f
     nt.nodes.remove(geo)
     nt.nodes.remove(em)
+    nt.links.new(nt.nodes["Principled BSDF"].outputs[0], nt.nodes["Material Output"].inputs["Surface"])
     rgb = np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1 / 2.4) - 0.055)
     rgba = np.concatenate([rgb, np.ones((TEXTURE, TEXTURE, 1))], axis=-1).astype(np.float32)
     final_img = bpy.data.images.new(nom_fichier, TEXTURE, TEXTURE, alpha=False)
@@ -2118,16 +2158,1001 @@ def finaliser_lisse(nom_fichier, couleurs, echelle, dossier=None, max_triangles=
     bsdf.inputs["Roughness"].default_value = 0.4
     m.node_tree.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
     bpy.data.images.remove(img)
+    if squelette_os:
+        # les poids des os sont recopies des blocs vers la peau lisse, puis adoucis aux articulations
+        mod = cible.modifiers.new("Poids", 'DATA_TRANSFER')
+        mod.object = src
+        mod.use_vert_data = True
+        mod.data_types_verts = {'VGROUP_WEIGHTS'}
+        mod.vert_mapping = 'POLYINTERP_NEAREST'
+        activer(cible)
+        bpy.ops.object.datalayout_transfer(modifier=mod.name)
+        bpy.ops.object.modifier_apply(modifier=mod.name)
+        lisser_poids(cible, 4)
     bpy.data.objects.remove(src, do_unlink=True)
 
     dossier = dossier or DOSSIER
     os.makedirs(dossier, exist_ok=True)
     chemin = os.path.join(dossier, nom_fichier + ".glb")
     activer(cible)
+    if squelette_os:
+        arm = creer_armature(squelette_os, bas, echelle, cible)
+        cible.select_set(True)
+        arm.select_set(True)
     bpy.ops.export_scene.gltf(filepath=chemin, use_selection=True, export_format='GLB')
     nb = sum(len(p.vertices) - 2 for p in me.polygons)
     print(f"Export OK : {chemin} ({nb} triangles, lisse)")
     return cible
+
+
+# =====================================================================
+#  GENERATEUR : 150 DINOS EN PLUS (31 a 180)
+#  Commun -> Rare : en blocs, gros yeux mignons.  Epique -> Secret : lisses,
+#  de plus en plus fantastiques (armure, ailes, flammes, halo, golem...).
+# =====================================================================
+R = random.Random(0)  # hasard du dino en cours (reinitialise pour chaque dino)
+
+
+def varier(d, amp):
+    """Petites differences de proportions d'un dino a l'autre."""
+    d = dict(d)
+    for k in ("corps", "tete", "cuisse", "pied", "bras"):
+        if k in d:
+            d[k] = tuple(x * R.uniform(1 - amp, 1 + amp) for x in d[k])
+    return d
+
+
+# ---------- familles (gabarits) ----------
+F = {
+    "petit_thero": dict(corps=(1.6, 2.4, 1.5), hauteur=2.4, cou=(1.2, 0.9, 0.9, 40), tete=(1.7, 0.9, 1.05),
+                        queue=(3, 1.6, 0.7, 4, 3), cuisse=(0.75, 1.2, 1.3), tibia=0.5, pied=(0.7, 1.0, 0.35),
+                        bras=(0.25, 0.5, 0.6), doigts=3, griffe=0.18, griffe_main=0.12, bandes=2),
+    "thero": dict(corps=(2.6, 3.2, 2.3), hauteur=3.5, cou=(1.3, 1.8, 1.6, 30), tete=(2.9, 1.35, 1.9),
+                  queue=(3, 1.9, 0.7, 4, 2), cuisse=(1.15, 1.9, 2.0), tibia=0.88, pied=(1.15, 1.45, 0.5),
+                  bras=(0.42, 0.75, 1.0), doigts=3, griffe_main=0.25, bandes=3),
+    "rex": dict(corps=(2.95, 3.1, 2.65), hauteur=3.6, cou=(1.3, 2.2, 1.75, 25), tete=(3.4, 1.7, 2.4),
+                queue=(3, 1.8, 0.7, 6, 4), cuisse=(1.25, 1.95, 2.1), tibia=0.95, pied=(1.25, 1.55, 0.55),
+                bras=(0.45, 0.7, 0.85), griffe=0.34, bandes=3),
+    "raptor": dict(corps=(1.8, 2.6, 1.7), hauteur=2.8, cou=(1.2, 1.0, 1.0, 45), tete=(2.1, 0.85, 1.1),
+                   queue=(4, 1.5, 0.75, 0, -1), cuisse=(0.85, 1.4, 1.5), tibia=0.55, pied=(0.8, 1.2, 0.38),
+                   bras=(0.3, 0.9, 0.85), doigts=3, griffe=0.22, griffe_main=0.22, ergot=True, bandes=3,
+                   rainures=False),
+    "petit_ornitho": dict(corps=(1.6, 2.4, 1.5), hauteur=2.7, cou=(1.0, 0.9, 0.9, 40), tete=(1.3, 0.8, 0.9),
+                          type_tete="herbi", queue=(4, 1.4, 0.75, 2, 1), cuisse=(0.8, 1.3, 1.4), tibia=0.5,
+                          pied=(0.7, 1.0, 0.32), bras=(0.22, 0.45, 0.55), doigts=3, griffe=0.16,
+                          griffe_main=0.1, bandes=3),
+    "ornitho": dict(corps=(2.5, 3.0, 2.3), hauteur=3.3, cou=(1.2, 1.6, 1.4, 30), tete=(2.0, 1.15, 1.5),
+                    type_tete="herbi", queue=(3, 1.8, 0.7, 4, 2), cuisse=(1.1, 1.8, 1.9), tibia=0.85,
+                    pied=(1.1, 1.4, 0.48), bras=(0.42, 0.65, 1.0), doigts=3, bandes=3),
+    "prosauro": dict(corps=(2.2, 2.8, 2.1), hauteur=3.2, cou=(1.1, 1.1, 1.0, 45), cou_n=3, cou_retrecit=0.92,
+                     cou_courbe=-8, tete=(1.3, 0.8, 0.9), type_tete="herbi", queue=(4, 1.6, 0.72, 2, 1),
+                     cuisse=(1.0, 1.6, 1.7), tibia=0.7, pied=(0.95, 1.2, 0.42), bras=(0.35, 0.6, 0.9), doigts=3,
+                     pouce=0.35, bandes=3),
+    "pachy": dict(corps=(2.3, 2.6, 2.2), hauteur=3.0, cou=(1.0, 1.5, 1.4, 30), tete=(1.7, 1.25, 1.6),
+                  type_tete="herbi", queue=(3, 1.6, 0.7, 4, 2), cuisse=(1.0, 1.6, 1.7), tibia=0.75,
+                  pied=(1.0, 1.3, 0.45), bras=(0.35, 0.5, 0.7), bandes=2),
+    "cerato_petit": dict(corps=(1.8, 2.3, 1.5), hauteur=1.7, cou=(0.6, 1.2, 1.1, 15), tete=(1.5, 1.0, 1.3),
+                         queue=(2, 1.1, 0.65, 0, -4), patte=0.5, bandes=2),
+    "cerato": dict(corps=(2.9, 3.5, 2.3), hauteur=2.6, cou=(0.6, 1.8, 1.6, 10), tete=(2.3, 1.45, 1.95),
+                   queue=(2, 1.4, 0.62, 0, -4), patte=0.8, bandes=3),
+    "ankylo": dict(corps=(3.2, 3.4, 1.8), hauteur=2.1, avant=(0.85, 0.85), cou=(0.6, 1.5, 1.1, 5),
+                   tete=(1.4, 0.85, 1.6), queue=(3, 1.4, 0.62, -2, 0), patte=0.7, bandes=0,
+                   hauteur_pattes=(1.55, 1.55)),
+    "ankylo_petit": dict(corps=(2.2, 2.5, 1.4), hauteur=1.6, avant=(0.85, 0.85), cou=(0.5, 1.1, 0.9, 5),
+                         tete=(1.1, 0.7, 1.2), queue=(3, 1.0, 0.62, -2, 0), patte=0.45, bandes=0,
+                         hauteur_pattes=(1.2, 1.2)),
+    "stego": dict(corps=(2.6, 3.6, 2.4), hauteur=2.9, avant=(0.75, 0.7), cou=(1.0, 1.1, 1.0, -15), cou_z=-0.15,
+                  tete=(1.4, 0.8, 0.9), queue=(3, 1.7, 0.66, 8, 4), patte=0.7, bandes=0, hauteur_pattes=(2.0, 2.6)),
+    "sauro": dict(corps=(2.8, 3.5, 2.5), hauteur=4.0, avant=(1.0, 1.0), cou=(1.4, 1.3, 1.2, 50), cou_n=4,
+                  cou_retrecit=0.88, cou_courbe=3, cou_z=0.3, tete=(1.3, 0.8, 0.9), queue=(4, 1.7, 0.66, -4, -4),
+                  patte=0.85, bandes=3, hauteur_pattes=(3.6, 3.3)),
+    "sauro_long": dict(corps=(2.6, 3.6, 2.3), hauteur=3.4, avant=(1.0, 1.0), cou=(1.4, 1.2, 1.1, 22), cou_n=5,
+                       cou_retrecit=0.9, cou_courbe=2, cou_z=0.2, tete=(1.2, 0.75, 0.85),
+                       queue=(6, 1.5, 0.72, -2, -2), patte=0.8, bandes=3, hauteur_pattes=(2.9, 2.9)),
+}
+FAMILLES_BIPEDES = {"petit_thero", "thero", "rex", "raptor", "petit_ornitho", "ornitho", "prosauro", "pachy"}
+FAMILLES_QUADRUPEDES = {"cerato_petit", "cerato", "ankylo", "ankylo_petit", "stego", "sauro", "sauro_long"}
+ECHELLE_FAMILLE = {"petit_thero": 0.45, "thero": 1.0, "rex": 1.15, "raptor": 0.7, "petit_ornitho": 0.5,
+                   "ornitho": 0.9, "prosauro": 0.85, "pachy": 0.75, "cerato_petit": 0.5, "cerato": 1.05,
+                   "ankylo": 0.95, "ankylo_petit": 0.5, "stego": 1.0, "sauro": 1.45, "sauro_long": 1.35,
+                   "ptero": 0.8, "ptero_petit": 0.5, "marin": 1.1, "marin_petit": 0.6}
+
+
+def corps_ptero(petit=False, crete="pointe", queue_longue=False):
+    hz = 2.4
+    corps = boite("Corps", (0, 0, hz), (1.1, 1.8, 1.1), "Peau")
+    cou, bout = segments("Cou", (0, -0.8, hz + 0.2), 1, 0.9, 0.6, 0.6, 0.9, 30, 0, vers_avant=True)
+    L, H, W = (1.4, 1.05, 1.0) if OEIL_X > 1.2 else (1.0, 0.75, 0.7)
+    tt = tete_herbivore((bout.y + 0.1, bout.z - 0.1), L, H, W, bec=False)
+    y, z = tt.p(1.0, 0.1)
+    boite("Bec", (0, y - 0.6, z), (0.35, 1.6, 0.35), "Corne", avant=(0.3, 0.3))
+    y, z = tt.p(0.1, 0.8)
+    if crete == "pointe":
+        boite("Crete", (0, y + 0.8, z + 0.3), (0.15, 1.8, 0.6), "Accent", arriere=(1, 0.3), tangage=18)
+    elif crete == "voile":
+        plaque("Crete", [tt.p(u, v) for u, v in ((0.2, 0.9), (0.3, 2.6), (0.7, 2.2), (0.9, 0.9))], 0.12, "Accent",
+               biseau=0.03)
+    env = 4.6 if not petit else 3.6
+    for s in (-1, 1):
+        aile = [(0.4, -0.5), (env * 0.4, -0.65), (env * 0.85, -0.3), (env, 0.2), (env * 0.62, 0.7), (env * 0.3, 1.0),
+                (0.4, 0.8)]
+        plaque("Aile", [(s * x, y_) for x, y_ in aile], 0.1, "Accent", plan="xy", decalage=(0, 0, hz + 0.25), biseau=0.03)
+        boite("Os", (s * env * 0.47, -0.45, hz + 0.3), (env * 0.84, 0.25, 0.22), "Peau", lacet=s * -6)
+        boite("Jambe", (s * 0.35, 0.9, hz - 0.75), (0.22, 0.22, 1.1), "Peau", tangage=-35)
+        cone("Griffe", (s * 0.35, 1.25, hz - 1.3), 0.06, 0.2, "Griffe", (0, 1, -1))
+    queue = []
+    fin = Vector((0, 1.0, hz))
+    if queue_longue:
+        queue, fin = segments("Queue", (0, 0.8, hz), 4, 0.8, 0.3, 0.3, 0.85, 0, 2)
+        cone("BoutQueue", fin, 0.3, 0.5, "Accent", (0, 1, 0), sommets=4, echelle=(0.3, 1, 1))
+    return {"corps": corps, "cou": cou, "tete": tt, "queue": queue, "fin_queue": fin, "w": 1.1, "l": 1.8, "h": 1.1,
+            "hz": hz, "d": {}}
+
+
+def corps_marin(sorte="mosa"):
+    """Reptile marin sur un socle : plesio (long cou), mosa (gueule de croco), ichthyo (dauphin)."""
+    hz = 3.0
+    w, l, h = {"plesio": (2.2, 3.2, 1.5), "mosa": (1.9, 3.6, 1.6), "ichthyo": (1.7, 3.0, 1.7)}[sorte]
+    corps = boite("Corps", (0, 0, hz), (w, l, h), "Peau", avant=(0.85, 0.8), arriere=(0.8, 0.75))
+    cou = []
+    if sorte == "plesio":
+        cou, bout = segments("Cou", (0, -l * 0.4, hz + h * 0.1), 5, 0.9, 0.8, 0.75, 0.93, 28, -4, vers_avant=True)
+        L, H, W = 1.4, 0.75, 0.95
+    else:
+        bout = Vector((0, -l * 0.42, hz + h * 0.1))
+        L, H, W = (2.6, 1.1, 1.4) if sorte == "mosa" else (2.4, 0.9, 1.1)
+    tt = tete_carnivore((bout.y + L * 0.06, bout.z - H * 0.3), L, H, W, arcade=(sorte == "mosa"), rainures=False)
+    queue, fin = segments("Queue", (0, l * 0.42, hz), 4 if sorte != "ichthyo" else 2, 1.3, w * 0.7, h * 0.7,
+                          0.68, 0, 0)
+    if sorte == "ichthyo":
+        plaque("Nageoire", [(fin.y - 0.2, fin.z), (fin.y + 0.9, fin.z + 1.3), (fin.y + 0.5, fin.z),
+                            (fin.y + 0.9, fin.z - 1.3)], 0.14, "Accent", biseau=0.03)
+        plaque("Aileron", [(-0.6, hz + h / 2 - 0.1), (0.2, hz + h / 2 + 1.0), (0.6, hz + h / 2 - 0.1)], 0.14,
+               "Accent", biseau=0.03)
+    else:
+        plaque("Nageoire", [(fin.y - 0.3, fin.z), (fin.y + 0.9, fin.z + 0.9), (fin.y + 0.6, fin.z - 0.1),
+                            (fin.y + 0.8, fin.z - 0.6)], 0.12, "Accent", biseau=0.03)
+    for s in (-1, 1):
+        for y0, t_ in ((-l * 0.25, 1.0), (l * 0.25, 0.75)):
+            pts = [(0, -0.3), (1.6 * t_, -0.1), (2.2 * t_, 0.35), (1.4 * t_, 0.45), (0, 0.35)]
+            o = plaque("Palme", [(s * (w / 2 - 0.1 + x), y0 + y_) for x, y_ in pts], 0.14, "Accent", plan="xy",
+                       decalage=(0, 0, hz - h * 0.3), biseau=0.03)
+    if OEIL_X <= 1.2:
+        bandes_corps(corps, (0, 0, hz), w, h, l, n=3)
+    return {"corps": corps, "cou": cou, "tete": tt, "queue": queue, "fin_queue": fin, "w": w, "l": l, "h": h,
+            "hz": hz, "d": {}}
+
+
+# ---------- decors ----------
+def _tete_obj(b):
+    return b["tete"].objs[0]
+
+
+def d_corne_nez(b, taille=1.0, mat="Corne"):
+    tt = b["tete"]
+    y, z = tt.p(0.85, 0.85 if tt.objs else 0.6)
+    cone("CorneNez", (0, y, z), 0.18 * taille, 0.7 * taille, mat, (0, -0.4, 1), sommets=6)
+
+
+def d_cornes_yeux(b, taille=1.0, mat="Corne", vers_avant=False):
+    tt = b["tete"]
+    for s in (-1, 1):
+        y, z = tt.p(0.42, 0.95)
+        d = (s * 0.15, -1, 0.75) if vers_avant else (s, 0.2, 0.7)
+        cone("Corne", (s * tt.W * 0.25, y, z), 0.2 * taille, 1.0 * taille, mat, d, sommets=6)
+
+
+def d_crete_ronde(b, mat="Accent"):
+    tt = b["tete"]
+    plaque("Crete", [tt.p(u, v) for u, v in ((0.3, 0.95), (0.45, 1.6), (0.8, 1.45), (0.95, 0.7), (0.6, 0.95))],
+           max(0.12, tt.W * 0.1), mat, biseau=0.03)
+
+
+def d_cretes2(b, mat="Accent"):
+    tt = b["tete"]
+    for s in (-1, 1):
+        pts = [tt.p(u, v) for u, v in ((0.15, 0.9), (0.35, 1.7), (0.6, 1.55), (0.85, 0.9), (0.6, 0.95), (0.35, 0.98))]
+        plaque("Crete", pts, 0.12, mat, decalage=(s * tt.W * 0.18, 0, 0), biseau=0.03)
+
+
+def d_crete_casque(b, mat="Accent"):
+    tt = b["tete"]
+    plaque("Crete", [tt.p(u, v) for u, v in ((0.2, 0.9), (0.25, 1.6), (0.45, 1.95), (0.7, 1.6), (0.78, 0.9))],
+           tt.W * 0.35, mat, biseau=0.05)
+
+
+def d_crete_hache(b, mat="Accent"):
+    tt = b["tete"]
+    plaque("Crete", [tt.p(u, v) for u, v in ((0.15, 0.9), (0.3, 1.8), (0.75, 2.05), (0.65, 1.4), (0.55, 0.95))],
+           tt.W * 0.25, mat, biseau=0.04)
+
+
+def d_crete_tube(b, mat="Accent"):
+    tt = b["tete"]
+    y, z = tt.p(0.3, 0.9)
+    boite("Crete", (0, y + tt.L * 0.45, z + tt.H * 0.27), (0.42, tt.L * 1.2, 0.46), mat, arriere=(0.7, 0.7), tangage=22)
+
+
+def d_crete_pique(b, mat="Accent"):
+    tt = b["tete"]
+    y, z = tt.p(0.2, 0.9)
+    cone("Crete", (0, y, z), 0.22, 1.2, mat, (0, 1, 0.6), sommets=4, echelle=(0.5, 1, 1))
+
+
+def d_licorne(b, mat="Accent"):
+    tt = b["tete"]
+    y, z = tt.p(0.6, 0.95)
+    boite("Licorne", (0, y, z + 0.6), (0.2, 0.2, 1.4), mat, tangage=-15)
+    boite("Licorne", (0, y - 0.2, z + 1.25), (0.5, 0.15, 0.4), mat)
+
+
+def d_dome(b, mat="Accent", piques=False):
+    tt = b["tete"]
+    y, z = tt.p(0.4, 0.95)
+    ellipse("Dome", (0, y, z), (tt.W * 0.5, tt.L * 0.42, tt.H * 0.55), mat, seg=10, anneaux=6)
+    if piques:
+        for s in (-1, 1):
+            for u in (0.1, 0.25, 0.4):
+                yy, zz = tt.p(u, 0.8)
+                cone("Corne", (s * tt.demi_largeur(u) * 0.9, yy, zz), 0.12, 0.5, "Corne", (s * 0.6, 0.6, 0.5))
+            yn, zn = tt.p(0.9, 0.5)
+            cone("Corne", (s * 0.15, yn, zn), 0.08, 0.3, "Corne", (s * 0.3, -0.5, 1))
+
+
+def d_collerette(b, taille=1.0, sorte="simple", mat="Accent"):
+    tt = b["tete"]
+    y, z = tt.p(0.05, 0.6)
+    k = taille * tt.W / 2.0
+    pts = [(-1.5, -0.4), (-1.9, 0.6), (-1.4, 1.7), (0, 2.2), (1.4, 1.7), (1.9, 0.6), (1.5, -0.4)]
+    plaque("Collerette", [(x * k, z_ * k) for x, z_ in pts], 0.2, mat, plan="xz", decalage=(0, y + 0.15, z), biseau=0.05)
+    n = {"simple": 7, "pics": 6, "royale": 11}[sorte]
+    for a in np.linspace(-160, -20, n):
+        r = math.radians(a)
+        L = (1.3 if sorte == "pics" else 0.35) * taille
+        cone("Pointe", (1.75 * k * math.cos(r), y + 0.15, z + 0.8 * k - 1.35 * k * math.sin(r)), 0.16 * taille, L,
+             "Corne", (math.cos(r), 0.3 if sorte == "pics" else 0, -math.sin(r)), sommets=6)
+
+
+def d_bosse(b, mat="Accent"):
+    hz, h, l = b["hz"], b["h"], b["l"]
+    loc, _ = toucher(b["corps"], (0, l * 0.25, 60), (0, 0, -1))
+    if loc:
+        cone("Bosse", loc - Vector((0, 0, 0.3)), 0.5, 1.4, mat, (0, 0.2, 1), sommets=4, echelle=(0.35, 1, 1))
+
+
+def d_voile(b, hauteur=3.0, mat="Accent", epines=True):
+    hz, h, l = b["hz"], b["h"], b["l"]
+    top = hz + h / 2 - 0.2
+    y0, y1 = -l * 0.6, l * 1.1
+    pts = [(y0, top), (y0 + (y1 - y0) * 0.1, top + hauteur * 0.55), (y0 + (y1 - y0) * 0.3, top + hauteur * 0.95),
+           (y0 + (y1 - y0) * 0.55, top + hauteur), (y0 + (y1 - y0) * 0.8, top + hauteur * 0.75), (y1, top - 0.1)]
+    plaque("Voile", pts, 0.18, mat, biseau=0.04)
+    if epines:
+        echant = le_long(pts, 0.05)
+        for y in np.linspace(y0 + 0.4, y1 - 0.4, 9):
+            hy = max(zz for (yy, zz) in echant if abs(yy - y) < 0.08) - top
+            boite("Epine", (0, y, top + hy / 2), (0.24, 0.16, hy), "Rayure", biseau=0.03)
+
+
+def d_plaques(b, mat="Accent", taille=1.0):
+    cibles = [b["corps"]] + [q[0] for q in b["queue"]] + [c[0] for c in b["cou"]]
+    y, k = -b["l"] * 0.55, 0
+    while y < b["l"] * 1.3:
+        loc, _ = toucher(cibles, (0, y, 60), (0, 0, -1))
+        if loc:
+            hmax = (1.4 * math.exp(-((y - 0.2) / 2.2) ** 2) + 0.35) * taille
+            s = -1 if k % 2 else 1
+            cone("Plaque", (s * 0.22, y, loc.z - 0.15), hmax * 0.55, hmax, mat, (s * 0.15, 0, 1), sommets=4,
+                 echelle=(0.18, 1, 1))
+        y += 0.42
+        k += 1
+
+
+def d_piques_queue(b, mat="Corne"):
+    fin = b["fin_queue"]
+    for s in (-1, 1):
+        for dy in (-0.4, 0.1):
+            cone("Pique", fin + Vector((s * 0.15, dy, 0.1)), 0.12, 0.9, mat, (s, 0.5, 0.5), sommets=6)
+
+
+def d_piques_epaules(b, mat="Corne"):
+    for s in (-1, 1):
+        loc, n = toucher(b["corps"], (s * 20, -b["l"] * 0.25, b["hz"] + 0.3), (-s, 0, 0))
+        if loc:
+            cone("Pique", loc, 0.2, 1.2, mat, (s, 0.4, 0.4), sommets=6)
+
+
+def d_armure_dos(b, mat="Accent"):
+    for y in np.linspace(-b["l"] * 0.4, b["l"] * 0.4, 5):
+        for x in np.linspace(-b["w"] * 0.35, b["w"] * 0.35, 4):
+            loc, n = toucher(b["corps"], (x, y, 50), (0, 0, -1))
+            if loc:
+                boite("Ecaille", (x, y, loc.z + 0.05), (b["w"] * 0.16, 0.45, 0.22), mat)
+    for s in (-1, 1):
+        for y in np.linspace(-b["l"] * 0.4, b["l"] * 0.45, 5):
+            loc, n = toucher(b["corps"], (s * 20, y, b["hz"] + 0.1), (-s, 0, 0))
+            if loc:
+                cone("Pique", loc, 0.2, 0.6, "Corne", (s, 0.3, 0.1))
+
+
+def d_massue(b, mat="Corne"):
+    boite("Massue", b["fin_queue"] + Vector((0, 0.3, 0)), (1.1, 0.85, 0.65), mat, biseau=0.15)
+
+
+def d_plumes(b, mat="Accent"):
+    tt = b["tete"]
+    for k, u in enumerate((0.0, 0.12, 0.24)):
+        y, z = tt.p(u, 0.9)
+        cone("Plume", (0, y + 0.1, z), 0.25, 0.7 - k * 0.12, mat, (0, 1, 0.8), echelle=(0.35, 1, 1))
+    eventail(b["fin_queue"] + Vector((0, -0.2, 0)), 5, 1.1, mat)
+    for s in (-1, 1):
+        cone("Plume", (s * (b["w"] / 2 + 0.2), -b["l"] * 0.4, b["hz"] - b["h"] * 0.1), 0.3, 0.9, mat,
+             (s * 0.3, 1, -0.6), echelle=(0.25, 1, 1))
+
+
+def d_griffes_geantes(b, mat="Griffe"):
+    for s in (-1, 1):
+        x = s * (b["w"] / 2 + 0.1)
+        for dx in (-0.12, 0, 0.12):
+            cone("Griffe", (x + dx, -b["l"] * 0.42 - 0.9, b["hz"] - b["h"] * 0.45), 0.08, 1.2, mat, (0, -0.3, -1))
+
+
+def d_epines_cou(b, mat="Accent"):
+    for o, c, w, h in b["cou"]:
+        for s in (-1, 1):
+            cone("Epine", c + Vector((s * w * 0.2, 0, h * 0.4)), 0.1, 1.1, mat, (s * 0.25, 0.3, 1), sommets=4)
+
+
+def d_taches(b, mat="Rayure", n=12):
+    for _ in range(n):
+        s = R.choice((-1, 1))
+        y = R.uniform(-b["l"] * 0.4, b["l"] * 0.4)
+        z = b["hz"] + R.uniform(-0.1, 0.45) * b["h"]
+        loc, nrm = toucher(b["corps"], (s * 30, y, z), (-s, 0, 0))
+        if loc:
+            t_ = R.uniform(0.18, 0.32)
+            ellipse("Tache", loc, (t_, t_ * 1.2, 0.04), mat, rot=nrm.to_track_quat('Z', 'Y'), seg=6, anneaux=4)
+
+
+def d_piques_dos(b, mat="Accent", taille=1.0):
+    piques_dos(-b["l"] * 0.6, b["l"] * 1.6, 0.45, 0.6 * taille, 0.25 * taille, mat=mat, largeur=0.4)
+
+
+# fantastiques
+def d_cristaux(b, mat="Gemme", n=4):
+    for y in np.linspace(-b["l"] * 0.35, b["l"] * 0.35, n):
+        loc, _ = toucher(b["corps"], (0, y, 60), (0, 0, -1))
+        if loc:
+            cristaux(loc - Vector((0, 0, 0.2)), 3, 1.0, mat, rayon=0.4)
+
+
+def d_flammes(b, mat="Lueur", mat2="Accent"):
+    points = []
+    loc, _ = toucher(b["corps"], (0, 0, 60), (0, 0, -1))
+    if loc:
+        points.append(loc)
+    points.append(b["fin_queue"])
+    y, z = b["tete"].p(0.2, 1.0)
+    points.append(Vector((0, y, z)))
+    for p in points:
+        cone("Flamme", p, 0.35, 1.2, mat, (0, 0.3, 1), sommets=4)
+        for s in (-1, 1):
+            cone("Flamme", p + Vector((s * 0.2, 0.1, 0)), 0.25, 0.8, mat2, (s * 0.5, 0.4, 1), sommets=4)
+
+
+def d_ailes(b, sorte="dragon", membrane="Accent", os_mat="Rayure", taille=1.0):
+    base = (0, -b["l"] * 0.15, b["hz"] + b["h"] * 0.4)
+    for s in (-1, 1):
+        if sorte == "dragon":
+            aile_dragon(s, base, 1.5 * taille, membrane, os_mat)
+        else:
+            aile_plumes_v(s, base, 1.5 * taille, membrane, os_mat)
+
+
+def aile_plumes_v(s, base, t, mat1, mat2):
+    """Aile a plumes dressee (style pegase / ange) : deux couches de plumes."""
+    couches = ((mat2, 1.0, 0.0), (mat1, 0.72, 0.05))
+    for mat, k, dy in couches:
+        pts = [(0.1, -0.2), (0.6 * k, 0.9 * k), (1.3 * k, 1.8 * k), (2.0 * k, 2.3 * k)]
+        for i in range(6):
+            a = i / 5
+            pts.append(((2.0 - 0.9 * a) * k + (0.25 if i % 2 else 0), (2.3 - 2.3 * a) * k - (0.2 if i % 2 else 0)))
+        pts.append((0.4 * k, -0.3))
+        plaque("Aile", [(s * x * t, z * t) for x, z in pts], 0.09, mat, plan="xz",
+               decalage=(base[0], base[1] + 0.1 + dy, base[2]), biseau=0.02)
+
+
+def d_halo(b, mat="Lueur"):
+    y, z = b["tete"].p(0.4, 1.0)
+    c = Vector((0, y, z + 0.9))
+    for k in range(12):
+        a = 2 * math.pi * k / 12
+        boite("Halo", c + Vector((0.7 * math.cos(a), 0.7 * math.sin(a), 0)), (0.3, 0.3, 0.12), mat, biseau=0.02,
+              lacet=math.degrees(a))
+
+
+def d_couronne(b, mat="Accent", gemme_mat="Gemme"):
+    y, z = b["tete"].p(0.4, 1.0)
+    boite("Couronne", (0, y, z + 0.2), (0.9, 0.9, 0.3), mat, biseau=0.04)
+    for x in (-0.35, 0, 0.35):
+        cone("Pointe", (x, y - 0.35, z + 0.35), 0.13, 0.45 if x == 0 else 0.32, mat, (0, 0, 1), sommets=4)
+        cone("Pointe", (x, y + 0.35, z + 0.35), 0.13, 0.32, mat, (0, 0, 1), sommets=4)
+    gemme((0, y - 0.47, z + 0.2), 0.14, gemme_mat)
+
+
+def d_cornes_demon(b, mat="Corne"):
+    tt = b["tete"]
+    for s in (-1, 1):
+        y, z = tt.p(0.25, 0.95)
+        p = Vector((s * tt.W * 0.3, y, z))
+        d = Vector((s * 0.6, 0.3, 1)).normalized()
+        for k in range(3):
+            o = boite("CorneDemon", p + d * 0.3, (0.3 - k * 0.06, 0.3 - k * 0.06, 0.6), mat, biseau=0.04)
+            o.rotation_mode = 'QUATERNION'
+            o.rotation_quaternion = d.to_track_quat('Z', 'Y')
+            p = p + d * 0.55
+            d = (d + Vector((0, 0.5, -0.1))).normalized()
+        cone("Corne", p, 0.12, 0.5, mat, d, sommets=4)
+
+
+def d_chaines(b, mat="Rayure"):
+    hz, w, l, h = b["hz"], b["w"], b["l"], b["h"]
+    for s in (-1, 1):
+        a = Vector((s * w * 0.45, -l * 0.35, hz + h * 0.35))
+        c = Vector((-s * w * 0.45, l * 0.25, hz - h * 0.3))
+        for k in range(9):
+            p = a.lerp(c, k / 8) + Vector((s * 0.15, 0, 0))
+            boite("Chaine", p, (0.18, 0.32, 0.18) if k % 2 else (0.18, 0.18, 0.32), mat, biseau=0.03)
+
+
+def d_armure(b, mat="Accent", mat2="Rayure", gemme_mat="Lueur"):
+    """Plaques d'armure, epaulieres a pointes, coeur lumineux sur le torse."""
+    hz, w, l, h = b["hz"], b["w"], b["l"], b["h"]
+    bandes_corps(b["corps"], (0, 0, hz), w + 0.1, h * 1.05, l, n=3, couleur=mat)
+    for s in (-1, 1):
+        loc, nrm = toucher(b["corps"], (s * 20, -l * 0.3, hz + h * 0.25), (-s, 0, 0))
+        if loc:
+            boite("Epauliere", loc + Vector((s * 0.15, 0, 0.1)), (0.5, 1.2, 0.7), mat, biseau=0.08)
+            for k in range(3):
+                cone("Pique", loc + Vector((s * 0.35, -0.4 + k * 0.4, 0.4)), 0.14, 0.6, mat2, (s * 0.6, 0.2, 1))
+    loc, nrm = toucher(b["corps"], (0, -40, hz), (0, 1, 0))
+    if loc:
+        gemme(loc + Vector((0, -0.1, 0)), 0.35, gemme_mat)
+        boite("Coeur", loc + Vector((0, 0.05, 0)), (0.9, 0.12, 0.9), mat2, biseau=0.04, lacet=0, roulis=45)
+
+
+def d_mecha(b, mat="Accent", mat2="Rayure", lueur="Lueur"):
+    """Robot : panneaux, boulons, visiere et coeur lumineux."""
+    d_armure(b, mat, mat2, lueur)
+    tt = b["tete"]
+    y, z = tt.p(0.45, 0.62)
+    boite("Visiere", (0, y, z), (tt.W * 1.02, tt.L * 0.25, tt.H * 0.16), lueur, biseau=0.02)
+    for o, c, w, h in b["queue"][:2] + [(b["corps"], Vector((0, 0, b["hz"])), b["w"], b["h"])]:
+        for s in (-1, 1):
+            loc, nrm = toucher(o, (s * 20, c.y, c.z), (-s, 0, 0))
+            if loc:
+                ellipse("Boulon", loc, (0.12, 0.12, 0.06), mat2, rot=nrm.to_track_quat('Z', 'Y'), seg=6, anneaux=4)
+
+
+def d_yeux_lueur(b, mat="Lueur"):
+    pass  # les yeux lumineux viennent de la couleur "Oeil" de la palette
+
+
+def d_gemmes_corps(b, mat="Lueur"):
+    for s in (-1, 1):
+        for y in np.linspace(-b["l"] * 0.35, b["l"] * 0.35, 3):
+            loc, n = toucher(b["corps"], (s * 30, y, b["hz"] + b["h"] * 0.15), (-s, 0, 0))
+            if loc:
+                gemme(loc, 0.22, mat)
+
+
+def d_noyau(b, mat="Lueur"):
+    """Coeur lumineux sur le torse, avec des fissures qui rayonnent."""
+    loc, n = toucher(b["corps"], (0, -40, b["hz"] + b["h"] * 0.1), (0, 1, 0))
+    if loc is None:
+        return
+    gemme(loc + Vector((0, -0.1, 0)), 0.45, mat)
+    for k in range(8):
+        a = 2 * math.pi * k / 8
+        L = R.uniform(0.6, 1.0)
+        p = loc + Vector((math.cos(a) * L * 0.6, -0.04, math.sin(a) * L * 0.6))
+        boite("Fissure", p, (L, 0.06, 0.1), mat, biseau=0, roulis=-math.degrees(a))
+
+
+def d_bras_multiples(b):
+    w, l, h, hz = b["w"], b["l"], b["h"], b["hz"]
+    for k, dz in enumerate((0.35, -0.25)):
+        for s in (-1, 1):
+            bras(s * (w / 2 + 0.25), -l * 0.3 + k * 0.4, hz + h * dz, (0.45, 0.9, 1.0), griffes=3, griffe=0.3)
+
+
+def d_ailes4(b):
+    base = (0, -b["l"] * 0.15, b["hz"] + b["h"] * 0.4)
+    for s in (-1, 1):
+        aile_plumes_v(s, base, 1.7, "Gemme", "Accent")
+        aile_plumes_v(s, (base[0], base[1] + 0.35, base[2] - 0.6), 1.15, "Accent", "Gemme")
+
+
+def d_aureole(b, mat="Lueur"):
+    """Grand anneau dresse derriere les epaules."""
+    c = Vector((0, b["l"] * 0.05, b["hz"] + b["h"] * 0.9 + 1.0))
+    for k in range(18):
+        a = 2 * math.pi * k / 18
+        boite("Aureole", c + Vector((1.6 * math.cos(a), 0, 1.6 * math.sin(a))), (0.38, 0.14, 0.2), mat, biseau=0.02,
+              roulis=-math.degrees(a) + 90)
+
+
+def d_eventail_paon(b, mat="Accent", oeil_mat="Lueur"):
+    """Queue en eventail de paon, avec un oeil de gemme sur chaque plume."""
+    c = b["fin_queue"] + Vector((0, -0.6, 0.2))
+    for k in range(11):
+        a = math.radians(-80 + 160 * k / 10)
+        L = 3.2
+        pts = [(0, 0), (0.35, L * 0.55), (0, L), (-0.35, L * 0.55)]
+        o = plaque("PlumePaon", pts, 0.08, mat if k % 2 else "Gemme", plan="xz", decalage=c, biseau=0.02)
+        o.rotation_euler = (0, a, 0)
+        tip = c + Vector((math.sin(a) * L * 0.75, 0.05, math.cos(a) * L * 0.75))
+        gemme(tip, 0.2, oeil_mat)
+
+
+def d_lance(b, mat="Accent", lueur="Lueur"):
+    w, l, h, hz = b["w"], b["l"], b["h"], b["hz"]
+    x = w / 2 + 0.5
+    boite("Lance", (x, -l * 0.6, hz), (0.16, 0.16, 5.5), mat, biseau=0.03, tangage=-15)
+    cone("PointeLance", (x, -l * 0.6 - 0.7, hz + 2.65), 0.25, 0.9, lueur, (0, -0.26, 1), sommets=4)
+    gemme((x, -l * 0.6 - 0.65, hz + 2.45), 0.2, lueur)
+
+
+DECORS = {
+    "corne_nez": d_corne_nez, "cornes_yeux": d_cornes_yeux, "cornes_avant": lambda b: d_cornes_yeux(b, 1.4, vers_avant=True),
+    "crete_ronde": d_crete_ronde, "cretes2": d_cretes2, "crete_casque": d_crete_casque, "crete_hache": d_crete_hache,
+    "crete_tube": d_crete_tube, "crete_pique": d_crete_pique, "licorne": d_licorne, "dome": d_dome,
+    "dome_piques": lambda b: d_dome(b, piques=True), "collerette": d_collerette,
+    "collerette_pics": lambda b: d_collerette(b, 1.0, "pics"), "collerette_royale": lambda b: d_collerette(b, 1.1, "royale"),
+    "grande_collerette": lambda b: d_collerette(b, 1.35), "bosse": d_bosse, "voile": d_voile,
+    "voile_basse": lambda b: d_voile(b, 1.2, epines=False), "plaques": d_plaques, "piques_queue": d_piques_queue,
+    "piques_epaules": d_piques_epaules, "armure_dos": d_armure_dos, "massue": d_massue, "plumes": d_plumes,
+    "griffes_geantes": d_griffes_geantes, "epines_cou": d_epines_cou, "taches": d_taches, "piques_dos": d_piques_dos,
+    "piques_lueur": lambda b: d_piques_dos(b, "Lueur", 1.3), "cristaux": d_cristaux, "flammes": d_flammes,
+    "ailes_dragon": d_ailes, "ailes_plumes": lambda b: d_ailes(b, "plumes", "Gemme", "Accent"),
+    "ailes_ange_demon": None, "halo": d_halo, "couronne": d_couronne, "cornes_demon": d_cornes_demon,
+    "chaines": d_chaines, "armure": d_armure, "mecha": d_mecha, "yeux_lueur": d_yeux_lueur,
+}
+
+
+def d_ailes_ange_demon(b):
+    base = (0, -b["l"] * 0.15, b["hz"] + b["h"] * 0.4)
+    aile_plumes_v(-1, base, 1.6, "Gemme", "Accent")
+    aile_dragon(1, base, 1.6, "Bouche", "Rayure")
+
+
+DECORS["ailes_ange_demon"] = d_ailes_ange_demon
+DECORS.update(gemmes_corps=d_gemmes_corps, noyau=d_noyau, bras_multiples=d_bras_multiples, ailes4=d_ailes4,
+              aureole=d_aureole, eventail_paon=d_eventail_paon, lance=d_lance)
+
+# ---------- palettes (Peau, Rayure, Ventre, Accent, Corne, Oeil, Lueur, Gemme) ----------
+PALETTES = {
+    # communs : couleurs simples
+    "olive": dict(Peau=(128, 146, 78), Rayure=(90, 104, 56)),
+    "sable": dict(Peau=(214, 184, 126), Rayure=(170, 136, 86), Accent=(190, 120, 70)),
+    "terre": dict(Peau=(150, 104, 70), Rayure=(104, 70, 46), Accent=(200, 140, 80)),
+    "gris": dict(Peau=(140, 144, 150), Rayure=(98, 102, 110), Accent=(200, 120, 70)),
+    "mousse": dict(Peau=(104, 150, 92), Rayure=(66, 104, 60), Accent=(220, 190, 90)),
+    "beige": dict(Peau=(222, 204, 170), Rayure=(176, 150, 112), Accent=(160, 110, 80)),
+    "rouille": dict(Peau=(184, 110, 72), Rayure=(130, 72, 46), Accent=(240, 200, 120)),
+    "kaki": dict(Peau=(160, 156, 104), Rayure=(116, 112, 70), Accent=(110, 140, 80)),
+    # peu communs
+    "vert_vif": dict(Peau=(100, 186, 84), Rayure=(60, 130, 52), Accent=(250, 200, 60)),
+    "ocre": dict(Peau=(222, 164, 64), Rayure=(166, 112, 40), Accent=(180, 70, 50)),
+    "bleu_gris": dict(Peau=(108, 132, 168), Rayure=(72, 90, 120), Accent=(240, 160, 70)),
+    "terracotta": dict(Peau=(204, 114, 84), Rayure=(146, 74, 54), Accent=(90, 150, 140)),
+    "sarcelle": dict(Peau=(72, 150, 140), Rayure=(44, 104, 98), Accent=(240, 130, 50)),
+    "fauve": dict(Peau=(196, 150, 92), Rayure=(90, 60, 40), Accent=(220, 70, 60)),
+    # rares
+    "bleu": dict(Peau=(62, 110, 200), Rayure=(36, 66, 140), Accent=(250, 210, 70), Ventre=(220, 230, 250)),
+    "violet": dict(Peau=(130, 90, 190), Rayure=(86, 56, 140), Accent=(250, 180, 80), Ventre=(236, 226, 250)),
+    "rouge": dict(Peau=(196, 60, 52), Rayure=(110, 30, 30), Accent=(250, 200, 70), Ventre=(250, 226, 206)),
+    "orange_noir": dict(Peau=(236, 130, 40), Rayure=(40, 32, 30), Accent=(250, 220, 90)),
+    "emeraude": dict(Peau=(40, 160, 110), Rayure=(20, 100, 70), Accent=(250, 220, 90)),
+    "jaune_noir": dict(Peau=(240, 200, 50), Rayure=(36, 32, 30), Accent=(220, 60, 50)),
+    "rose": dict(Peau=(236, 130, 170), Rayure=(180, 80, 120), Accent=(120, 200, 230), Ventre=(252, 230, 240)),
+    # epiques
+    "neon": dict(Peau=(30, 30, 46), Rayure=(60, 255, 200), Accent=(255, 60, 220), Ventre=(60, 60, 90), Oeil=(60, 255, 200),
+                 Lueur=(60, 255, 200)),
+    "jade": dict(Peau=(60, 170, 120), Rayure=(30, 110, 80), Accent=(250, 210, 90), Corne=(250, 236, 180),
+                 Gemme=(140, 255, 190), Oeil=(250, 210, 90)),
+    "volcan": dict(Peau=(46, 40, 42), Rayure=(250, 110, 30), Accent=(255, 140, 40), Ventre=(110, 90, 86),
+                   Oeil=(255, 170, 40), Lueur=(255, 150, 40)),
+    "fer": dict(Peau=(120, 126, 140), Rayure=(70, 76, 90), Accent=(190, 196, 210), Corne=(230, 234, 240),
+                Oeil=(255, 80, 60)),
+    "ciel": dict(Peau=(130, 180, 250), Rayure=(250, 250, 255), Accent=(255, 220, 120), Ventre=(240, 248, 255),
+                 Gemme=(255, 255, 255)),
+    "corail": dict(Peau=(250, 130, 110), Rayure=(250, 220, 200), Accent=(70, 200, 210), Ventre=(255, 236, 226)),
+    "venin": dict(Peau=(120, 210, 60), Rayure=(60, 30, 90), Accent=(170, 60, 230), Oeil=(250, 240, 60),
+                  Lueur=(170, 255, 80)),
+    "glacial": dict(Peau=(200, 230, 250), Rayure=(110, 170, 230), Accent=(150, 220, 255), Gemme=(170, 240, 255),
+                    Oeil=(90, 200, 255), Lueur=(160, 240, 255)),
+    "marais": dict(Peau=(70, 110, 80), Rayure=(40, 70, 50), Accent=(120, 220, 160), Oeil=(250, 230, 80)),
+    "abysse": dict(Peau=(24, 42, 90), Rayure=(14, 24, 56), Accent=(60, 220, 240), Ventre=(80, 110, 170),
+                   Oeil=(60, 240, 255), Lueur=(60, 240, 255)),
+    "ombre": dict(Peau=(46, 36, 70), Rayure=(26, 20, 40), Accent=(170, 90, 255), Ventre=(90, 76, 120),
+                  Oeil=(200, 120, 255), Lueur=(190, 120, 255)),
+    "soleil": dict(Peau=(250, 200, 70), Rayure=(230, 120, 40), Accent=(255, 240, 160), Oeil=(255, 120, 40)),
+    "toxique": dict(Peau=(40, 50, 40), Rayure=(140, 255, 60), Accent=(140, 255, 60), Oeil=(140, 255, 60),
+                    Lueur=(140, 255, 60), Ventre=(80, 100, 70)),
+    # legendaires et +
+    "or": dict(Peau=(240, 190, 50), Rayure=(40, 34, 30), Accent=(255, 230, 120), Corne=(40, 34, 30),
+               Ventre=(255, 240, 190), Oeil=(255, 70, 40), Lueur=(255, 236, 140), Gemme=(255, 70, 90)),
+    "lave": dict(Peau=(34, 28, 30), Rayure=(255, 100, 20), Accent=(255, 150, 30), Ventre=(80, 60, 56),
+                 Oeil=(255, 200, 40), Lueur=(255, 130, 30), Corne=(255, 170, 60), Gemme=(255, 120, 30)),
+    "cristal": dict(Peau=(160, 210, 250), Rayure=(100, 150, 230), Accent=(200, 240, 255), Gemme=(140, 230, 255),
+                    Lueur=(180, 245, 255), Oeil=(60, 160, 255)),
+    "aurore": dict(Peau=(80, 200, 180), Rayure=(160, 90, 220), Accent=(120, 255, 200), Gemme=(220, 140, 255),
+                   Lueur=(140, 255, 210)),
+    "tonnerre": dict(Peau=(40, 50, 90), Rayure=(250, 230, 70), Accent=(250, 230, 70), Lueur=(120, 220, 255),
+                     Oeil=(120, 220, 255), Ventre=(110, 120, 160)),
+    "spectre": dict(Peau=(200, 220, 240), Rayure=(130, 150, 190), Accent=(120, 250, 230), Ventre=(240, 248, 255),
+                    Oeil=(80, 255, 220), Lueur=(120, 255, 230)),
+    "samourai": dict(Peau=(170, 30, 36), Rayure=(30, 26, 28), Accent=(30, 26, 28), Corne=(240, 200, 80),
+                     Oeil=(255, 220, 80), Lueur=(255, 210, 80)),
+    "galaxie": dict(Peau=(30, 24, 70), Rayure=(255, 240, 160), Accent=(150, 80, 230), Ventre=(70, 50, 130),
+                    Gemme=(255, 120, 220), Lueur=(255, 240, 170), Oeil=(255, 240, 170)),
+    "demon": dict(Peau=(40, 20, 24), Rayure=(120, 16, 24), Accent=(210, 30, 40), Corne=(30, 20, 20),
+                  Bouche=(255, 60, 30), Oeil=(255, 210, 40), Lueur=(255, 200, 40), Gemme=(255, 200, 40)),
+    "golem": dict(Peau=(190, 140, 50), Rayure=(40, 36, 34), Accent=(220, 170, 60), Corne=(40, 36, 34),
+                  Oeil=(255, 230, 100), Lueur=(255, 220, 90), Ventre=(150, 110, 40)),
+    "feu": dict(Peau=(230, 210, 180), Rayure=(30, 26, 26), Accent=(255, 120, 30), Corne=(30, 26, 26),
+                Oeil=(255, 120, 30), Lueur=(255, 150, 40), Gemme=(255, 90, 30)),
+    "divin": dict(Peau=(250, 248, 240), Rayure=(240, 200, 80), Accent=(255, 220, 100), Corne=(240, 200, 80),
+                  Gemme=(255, 255, 255), Lueur=(255, 236, 150), Oeil=(80, 180, 255), Ventre=(255, 250, 230)),
+    "ange_demon": dict(Peau=(236, 232, 226), Rayure=(30, 24, 26), Accent=(240, 190, 60), Corne=(30, 24, 26),
+                       Gemme=(255, 230, 120), Bouche=(220, 40, 30), Lueur=(255, 210, 80), Oeil=(255, 60, 40)),
+    "arcenciel": dict(Peau=(250, 250, 255), Rayure=(240, 70, 80), Accent=(80, 160, 250), Corne=(250, 210, 60),
+                      Gemme=(80, 220, 120), Lueur=(190, 100, 240), Oeil=(80, 160, 250)),
+    "fossile": dict(Peau=(236, 226, 200), Rayure=(60, 50, 44), Accent=(200, 186, 156), Corne=(236, 226, 200),
+                    Ventre=(210, 198, 170), Oeil=(80, 255, 140), Lueur=(80, 255, 140), Bouche=(40, 34, 30)),
+    "vide": dict(Peau=(22, 24, 48), Rayure=(12, 12, 28), Accent=(60, 70, 140), Corne=(40, 44, 80),
+                 Ventre=(50, 56, 100), Oeil=(120, 240, 255), Lueur=(120, 240, 255), Gemme=(120, 240, 255)),
+    "cristal_rose": dict(Peau=(236, 140, 210), Rayure=(170, 70, 170), Accent=(250, 190, 240), Corne=(180, 90, 220),
+                         Gemme=(255, 170, 240), Lueur=(255, 200, 250), Oeil=(200, 60, 200), Ventre=(252, 220, 245)),
+    "seraphin": dict(Peau=(236, 230, 214), Rayure=(220, 170, 60), Accent=(250, 200, 70), Corne=(220, 170, 60),
+                     Gemme=(255, 240, 160), Lueur=(255, 236, 120), Oeil=(250, 190, 40), Ventre=(250, 244, 226)),
+    "ciel_divin": dict(Peau=(170, 210, 255), Rayure=(255, 255, 255), Accent=(255, 220, 120), Corne=(255, 220, 120),
+                       Gemme=(255, 255, 255), Lueur=(255, 240, 170), Oeil=(80, 150, 255), Ventre=(240, 248, 255)),
+    "empereur": dict(Peau=(30, 26, 30), Rayure=(240, 190, 50), Accent=(240, 190, 50), Corne=(240, 190, 50),
+                     Gemme=(255, 50, 80), Lueur=(255, 220, 110), Oeil=(255, 60, 60), Ventre=(80, 66, 60)),
+}
+
+# ---------- les 150 ----------
+# (nom, famille, decors, palette)
+LISTE = {
+    "Commun": [
+        ("Coelophysis", "petit_thero", [], "olive"), ("Herrerasaurus", "petit_thero", ["taches"], "terre"),
+        ("Staurikosaurus", "petit_thero", [], "sable"), ("Segisaurus", "petit_thero", [], "gris"),
+        ("Tawa", "petit_thero", ["taches"], "rouille"), ("Procompsognathus", "petit_thero", [], "mousse"),
+        ("Lesothosaurus", "petit_ornitho", [], "beige"),
+        ("Heterodontosaurus", "petit_ornitho", ["taches"], "sable"), ("Dryosaurus", "petit_ornitho", [], "mousse"),
+        ("Thescelosaurus", "petit_ornitho", [], "olive"), ("Orodromeus", "petit_ornitho", [], "terre"),
+        ("Camptosaurus", "ornitho", [], "gris"),
+        ("Tenontosaurus", "ornitho", [], "rouille"), ("Muttaburrasaurus", "ornitho", [], "beige"),
+        ("Leptoceratops", "cerato_petit", [], "sable"), ("Bagaceratops", "cerato_petit", ["corne_nez"], "terre"),
+        ("Archaeoceratops", "cerato_petit", [], "mousse"), ("Scelidosaurus", "ankylo_petit", ["armure_dos"], "gris"),
+        ("Scutellosaurus", "ankylo_petit", ["armure_dos"], "kaki"), ("Gargoyleosaurus", "ankylo", ["armure_dos"], "terre"),
+        ("Nodosaurus", "ankylo", ["armure_dos"], "olive"), ("Huayangosaurus", "stego", ["plaques"], "rouille"),
+        ("Dacentrurus", "stego", ["plaques", "piques_queue"], "gris"), ("Plateosaurus", "prosauro", [], "sable"),
+        ("Massospondylus", "prosauro", ["taches"], "mousse"), ("Anchisaurus", "prosauro", [], "beige"),
+        ("Riojasaurus", "prosauro", [], "kaki"), ("Dimorphodon", "ptero_petit", [], "terre"),
+        ("Rhamphorhynchus", "ptero_petit", ["queue_longue"], "olive"), ("Pterodactylus", "ptero_petit", [], "gris"),
+        ("Anurognathus", "ptero_petit", [], "beige"), ("Nothosaurus", "marin_petit", [], "mousse"),
+        ("Mixosaurus", "marin_petit_ichthyo", [], "gris"),
+    ],
+    "Peu commun": [
+        ("Ceratosaurus", "thero", ["corne_nez"], "fauve"), ("Cryolophosaurus", "thero", ["crete_ronde"], "ocre"),
+        ("Monolophosaurus", "thero", ["crete_ronde"], "terracotta"), ("Guanlong", "petit_thero", ["crete_ronde"], "vert_vif"),
+        ("Eustreptospondylus", "thero", [], "bleu_gris"), ("Megalosaurus", "thero", ["taches"], "fauve"),
+        ("Majungasaurus", "thero", ["dome"], "terracotta"),
+        ("Concavenator", "thero", ["bosse"], "ocre"), ("Sinraptor", "thero", [], "vert_vif"),
+        ("Corythosaurus", "ornitho", ["crete_casque"], "sarcelle"), ("Lambeosaurus", "ornitho", ["crete_hache"], "ocre"),
+        ("Maiasaura", "ornitho", ["taches"], "bleu_gris"), ("Edmontosaurus", "ornitho", [], "vert_vif"),
+        ("Saurolophus", "ornitho", ["crete_pique"], "terracotta"), ("Tsintaosaurus", "ornitho", ["licorne"], "fauve"),
+        ("Hypacrosaurus", "ornitho", ["crete_casque"], "bleu_gris"), ("Stygimoloch", "pachy", ["dome_piques"], "terracotta"),
+        ("Stegoceras", "pachy", ["dome"], "sarcelle"),
+        ("Centrosaurus", "cerato", ["collerette", "corne_nez"], "fauve"),
+        ("Chasmosaurus", "cerato", ["grande_collerette", "cornes_avant"], "bleu_gris"),
+        ("Pachyrhinosaurus", "cerato", ["collerette"], "terracotta"),
+        ("Einiosaurus", "cerato", ["collerette", "corne_nez"], "vert_vif"),
+        ("Euoplocephalus", "ankylo", ["armure_dos", "massue"], "ocre"),
+        ("Edmontonia", "ankylo", ["armure_dos", "piques_epaules"], "bleu_gris"),
+        ("Diplodocus", "sauro_long", [], "sarcelle"), ("Camarasaurus", "sauro", [], "fauve"),
+        ("Plesiosaurus", "marin_plesio", [], "bleu_gris"), ("Tapejara", "ptero_voile", [], "terracotta"),
+    ],
+    "Rare": [
+        ("Carcharodontosaurus", "rex", [], "rouge"), ("Acrocanthosaurus", "thero", ["voile_basse"], "orange_noir"),
+        ("Albertosaurus", "thero", [], "bleu"), ("Daspletosaurus", "rex", ["taches"], "violet"),
+        ("Tarbosaurus", "rex", [], "emeraude"), ("Yutyrannus", "rex", ["plumes"], "rose"),
+        ("Torvosaurus", "thero", ["piques_dos"], "jaune_noir"), ("Utahraptor", "raptor", ["plumes"], "bleu"),
+        ("Deinonychus", "raptor", ["plumes"], "rouge"),
+        ("Therizinosaurus", "ornitho", ["griffes_geantes", "plumes"], "violet"),
+        ("Ouranosaurus", "ornitho", ["voile_basse"], "orange_noir"),
+        ("Styracosaurus", "cerato", ["collerette_pics", "corne_nez"], "jaune_noir"),
+        ("Kosmoceratops", "cerato", ["collerette_royale", "cornes_yeux"], "rose"),
+        ("Torosaurus", "cerato", ["grande_collerette", "cornes_avant"], "bleu"),
+        ("Kentrosaurus", "stego", ["plaques", "piques_epaules", "piques_queue"], "emeraude"),
+        ("Tuojiangosaurus", "stego", ["plaques", "piques_queue"], "rouge"),
+        ("Miragaia", "stego_long", ["plaques"], "violet"), ("Saichania", "ankylo", ["armure_dos", "massue"], "jaune_noir"),
+        ("Pinacosaurus", "ankylo", ["armure_dos", "massue"], "bleu"),
+        ("Amargasaurus", "sauro", ["epines_cou"], "orange_noir"), ("Mamenchisaurus", "sauro_long", [], "emeraude"),
+        ("Dreadnoughtus", "sauro", ["taches"], "rose"), ("Quetzalcoatlus", "ptero", [], "rouge"),
+        ("Elasmosaurus", "marin_plesio", [], "bleu"),
+        ("Ichthyosaurus", "marin_ichthyo", [], "emeraude"), ("Liopleurodon", "marin", [], "violet"),
+    ],
+    "Epique": [
+        ("Mosasaurus", "marin", ["piques_dos"], "abysse"), ("Argentinosaurus", "sauro", ["taches"], "ciel"),
+        ("Shonisaurus", "marin_ichthyo", [], "glacial"), ("Deinocheirus", "ornitho", ["voile_basse", "griffes_geantes"], "soleil"),
+        ("Kronosaurus", "marin", [], "ombre"), ("Patagotitan", "sauro_long", ["taches"], "corail"),
+        ("Tylosaurus", "marin", ["piques_dos"], "venin"), ("Raptor Neon", "raptor", ["plumes", "piques_lueur"], "neon"),
+        ("Triceratops de Jade", "cerato", ["grande_collerette", "cornes_avant", "corne_nez"], "jade"),
+        ("Stego Volcanique", "stego", ["plaques", "piques_queue"], "volcan"),
+        ("Ankylo de Fer", "ankylo", ["armure_dos", "massue", "piques_epaules"], "fer"),
+        ("Brachio Celeste", "sauro", ["cristaux"], "ciel"), ("Ptero Tempete", "ptero", [], "tonnerre"),
+        ("Parasaur Corail", "ornitho", ["crete_tube"], "corail"),
+        ("Dilopho Venin", "thero", ["cretes2", "piques_dos"], "venin"),
+        ("Carno Infernal", "thero", ["cornes_yeux", "piques_dos"], "volcan"),
+        ("Allo Glacial", "thero", ["cristaux"], "glacial"), ("Spino des Marais", "thero", ["voile"], "marais"),
+        ("Pachy Cristal", "pachy", ["dome", "cristaux"], "cristal"),
+        ("Styraco Royal", "cerato", ["collerette_pics", "corne_nez"], "or"),
+        ("Baryonyx Abyssal", "thero", ["piques_lueur"], "abysse"), 
+        ("Ceratosaure Toxique", "thero", ["corne_nez", "piques_lueur"], "toxique"),
+    ],
+    "Legendaire": [
+        ("Rex de Lave", "rex", ["flammes", "piques_lueur"], "lave"), ("Spino Abyssal", "thero", ["voile", "piques_lueur"], "abysse"),
+        ("Giganoto Tonnerre", "rex", ["piques_lueur", "cornes_yeux"], "tonnerre"),
+        ("Rex de Cristal", "rex", ["cristaux"], "cristal"),
+        ("Triceratops Titan", "cerato", ["collerette_royale", "cornes_avant", "corne_nez", "armure"], "or"),
+        ("Brachio Aurore", "sauro", ["cristaux", "epines_cou"], "aurore"),
+        ("Quetzal Solaire", "ptero", ["flammes"], "soleil"), ("Mosasaure Royal", "marin", ["couronne", "piques_dos"], "or"),
+        ("Stego Cristallin", "stego", ["plaques", "cristaux", "piques_queue"], "cristal"),
+        ("Raptor Spectre", "raptor", ["plumes", "piques_lueur"], "spectre"),
+        ("Ankylo Forteresse", "ankylo", ["armure_dos", "massue", "armure"], "fer"),
+        ("Therizino Faucheur", "ornitho", ["griffes_geantes", "plumes", "piques_lueur"], "ombre"),
+        ("Rex Aile", "rex", ["ailes_plumes"], "soleil"), ("Raptor de Feu", "raptor", ["flammes", "armure"], "feu"),
+        ("Golem Rex", "rex", ["mecha"], "golem"), ("Dilopho Dragon", "thero", ["cretes2", "ailes_dragon"], "venin"),
+        ("Allo Samourai", "thero", ["armure", "cornes_demon"], "samourai"),
+    ],
+    "Mythique": [
+        ("Dragon Rex", "rex", ["ailes_dragon", "cornes_demon", "flammes"], "lave"),
+        ("Phenix Ptero", "ptero", ["flammes", "halo"], "feu"),
+        ("Leviathan", "marin", ["piques_lueur", "cornes_demon"], "abysse"),
+        ("Rex Galaxie", "rex", ["halo", "cristaux", "piques_lueur"], "galaxie"),
+        ("Spino Fantome", "thero", ["voile", "chaines"], "spectre"),
+        ("Titan de Jade", "sauro", ["cristaux", "armure", "epines_cou"], "jade"),
+        ("Roi Demon Rex", "rex", ["ailes_dragon", "cornes_demon", "chaines", "couronne"], "demon"),
+        ("Meca-Rex Dore", "rex", ["mecha", "piques_lueur"], "or"),
+        ("Pegase Dino Dore", "ornitho", ["ailes_plumes", "flammes", "armure"], "golem"),
+        ("Triceratops Infernal", "cerato", ["grande_collerette", "cornes_avant", "flammes", "armure"], "feu"),
+    ],
+    "Secret": [
+        ("Ange-Demon Rex", "rex", ["ailes_ange_demon", "halo", "cornes_demon", "armure"], "ange_demon"),
+        ("Dino Arc-en-ciel", "rex", ["ailes_plumes", "cristaux", "halo"], "arcenciel"),
+        ("Fossile Vivant", "rex", ["piques_lueur", "chaines"], "fossile"),
+        ("Empereur Dragon", "rex", ["ailes_dragon", "couronne", "cornes_demon", "armure", "flammes"], "empereur"),
+        ("Spino Celeste", "thero", ["voile", "ailes_plumes", "halo"], "ciel_divin"),
+        ("Triceratops du Neant", "cerato", ["grande_collerette", "cornes_avant", "noyau", "piques_lueur"], "vide"),
+    ],
+    "Eternel": [
+        ("Kaiju du Vide", "rex", ["bras_multiples", "noyau", "piques_lueur"], "vide"),
+        ("Dragon de Cristal Rose", "thero", ["ailes_dragon", "cristaux", "gemmes_corps", "cornes_demon"], "cristal_rose"),
+        ("Rex Cosmique Eternel", "rex", ["ailes4", "aureole", "gemmes_corps", "halo"], "galaxie"),
+        ("Leviathan Eternel", "marin", ["noyau", "aureole", "piques_lueur", "cornes_demon"], "abysse"),
+        ("Sauro des Etoiles", "sauro", ["cristaux", "gemmes_corps", "halo", "epines_cou"], "galaxie"),
+    ],
+    "Divin": [
+        ("Rex Seraphin", "rex", ["ailes4", "halo", "aureole", "armure", "lance"], "divin"),
+        ("Raptor Paon Divin", "raptor", ["eventail_paon", "halo", "gemmes_corps"], "seraphin"),
+        ("Ptero Seraphin", "ptero", ["aureole", "halo", "gemmes_corps", "flammes"], "seraphin"),
+    ],
+}
+RARETES = ["Commun", "Peu commun", "Rare", "Epique", "Legendaire", "Mythique", "Secret", "Eternel", "Divin"]
+LISSE = {"Epique", "Legendaire", "Mythique", "Secret", "Eternel", "Divin"}
+TAILLE_RARETE = {"Commun": 0.85, "Peu commun": 0.95, "Rare": 1.05, "Epique": 1.15, "Legendaire": 1.25,
+                 "Mythique": 1.35, "Secret": 1.45, "Eternel": 1.55, "Divin": 1.65}
+
+GENERES = []
+_n = 31
+for _rar in RARETES:
+    for _nom, _fam, _decos, _pal in LISTE[_rar]:
+        GENERES.append(dict(numero=_n, nom=_nom, famille=_fam, decors=_decos, palette=_pal, rarete=_rar))
+        _n += 1
+
+
+def construire_genere(g):
+    global OEIL_X, PUPILLE, R
+    nettoyer()
+    R = random.Random(g["numero"])
+    random.seed(g["numero"])
+    rar = g["rarete"]
+    rang = RARETES.index(rar)
+    OEIL_X = 1.45 if rang <= 1 else (1.25 if rang == 2 else 1.0)
+    couleurs = theme(PALETTES[g["palette"]])
+    PUPILLE = OEIL_X > 1.0 or sum(couleurs["Oeil"]) > 150
+    fam = g["famille"]
+    decos = list(g["decors"])
+    if fam.startswith("ptero"):
+        b = corps_ptero(petit=fam == "ptero_petit", crete="voile" if fam == "ptero_voile" else "pointe",
+                        queue_longue="queue_longue" in decos)
+        decos = [d for d in decos if d != "queue_longue"]
+        fam_e = "ptero_petit" if fam == "ptero_petit" else "ptero"
+    elif fam.startswith("marin"):
+        sorte = "plesio" if "plesio" in fam else ("ichthyo" if "ichthyo" in fam else "mosa")
+        b = corps_marin(sorte)
+        fam_e = "marin_petit" if "petit" in fam else "marin"
+    else:
+        base = fam if fam != "stego_long" else "stego"
+        d = varier(F[base], 0.1)
+        if fam == "stego_long":
+            d.update(cou=(1.1, 0.9, 0.8, 25), cou_n=3, cou_z=0.1)
+        d["rainures"] = False
+        if rang <= 2:  # dinos simples : pas de sourcils mechants
+            d["arcade"] = False
+        if rang >= 3:
+            d["bandes"] = max(d.get("bandes", 0), 3) if base not in ("ankylo", "ankylo_petit", "stego") else 0
+        b = corps_bipede(d) if base in FAMILLES_BIPEDES else corps_quadrupede(d)
+        fam_e = base
+    for nom_deco in decos:
+        DECORS[nom_deco](b)
+    if fam.startswith("ptero"):
+        sorte = "ptero"
+    elif fam.startswith("marin"):
+        sorte = "marin"
+    else:
+        sorte = "bipede" if fam_e in FAMILLES_BIPEDES else "quadrupede"
+    os_ = squelette(b, sorte)
+    lier_au_squelette(os_, b)
+    echelle = ECHELLE_FAMILLE[fam_e] * TAILLE_RARETE[rar]
+    slug = g["nom"].lower()
+    for a_, b_ in (("'", ""), ("-", "_"), (" ", "_"), ("é", "e"), ("è", "e"), ("ï", "i")):
+        slug = slug.replace(a_, b_)
+    fichier = f"{g['numero']:03d}_{slug}"
+    if rar in LISSE:
+        res = finaliser_lisse(fichier, couleurs, echelle, squelette_os=os_)
+    else:
+        res = finaliser(fichier, couleurs, echelle, squelette_os=os_)
+    OEIL_X, PUPILLE = 1.0, False
+    return res
+
+
+# =====================================================================
+#  SQUELETTE (articulations pour animer dans Roblox)
+# =====================================================================
+def squelette(b, sorte):
+    """Liste d'os (nom, debut, fin, parent) calculee d'apres la forme du dino."""
+    V = Vector
+    w, l, h, hz = b["w"], b["l"], b["h"], b["hz"]
+    os_ = [("Racine", V((0, 0, 0)), V((0, 0, 0.5)), None)]
+    bassin = V((0, l * 0.35, hz))
+    milieu = V((0, 0, hz))
+    avant = V((0, -l * 0.42, hz + h * 0.15))
+    os_ += [("Bassin", bassin, milieu, "Racine"), ("Torse", milieu, avant, "Bassin")]
+    # cou
+    parent, p = "Torse", avant
+    for i, (o, c, cw, ch) in enumerate(b["cou"]):
+        os_.append((f"Cou{i + 1}", p, c.copy(), parent))
+        parent, p = f"Cou{i + 1}", c.copy()
+    # tete + machoire
+    tt = b["tete"]
+    y0, z0 = tt.p(0.0, 0.3)
+    y1, z1 = tt.p(1.0, 0.3)
+    os_.append(("Tete", V((0, y0, z0)), V((0, y1, z1)), parent))
+    if tt.objs and len(tt.objs) > 1:  # tete de carnivore : machoire mobile
+        ya, za = tt.p(0.1, -0.05)
+        yb, zb = tt.p(0.95, -0.3)
+        os_.append(("Machoire", V((0, ya, za)), V((0, yb, zb)), "Tete"))
+    # queue
+    parent, p = "Bassin", bassin
+    for i, (o, c, qw, qh) in enumerate(b["queue"]):
+        os_.append((f"Queue{i + 1}", p, c.copy(), parent))
+        parent, p = f"Queue{i + 1}", c.copy()
+    if b["queue"]:
+        os_.append(("BoutQueue", p, b["fin_queue"].copy(), parent))
+    d = b["d"]
+    if sorte == "bipede":
+        cw, cl, ch = d["cuisse"]
+        fw, fl, fh = d["pied"]
+        for s, cote in ((-1, "R"), (1, "L")):
+            x = s * (w / 2 + cw * 0.1)
+            hy, hzz = l * 0.1, hz - h * 0.12
+            genou = V((x, hy + cl * 0.22, hzz - ch * 0.4))
+            py = hy + cl * 0.15 - fl * 0.25
+            cheville = V((x, py + fl * 0.15, fh * 0.6))
+            orteils = V((x, py - fl * 0.6, fh * 0.3))
+            os_ += [(f"Cuisse.{cote}", V((x, hy, hzz + ch * 0.3)), genou, "Bassin"),
+                    (f"Tibia.{cote}", genou, cheville, f"Cuisse.{cote}"),
+                    (f"Pied.{cote}", cheville, orteils, f"Tibia.{cote}")]
+            bw, bl, bh = d["bras"]
+            xb = s * (w / 2 + bw * 0.05)
+            yb, zb = -l * 0.42, hz - h * 0.02
+            coude = V((xb, yb, zb - bh * 0.45))
+            os_ += [(f"Bras.{cote}", V((xb, yb, zb + bh * 0.45)), coude, "Torse"),
+                    (f"AvantBras.{cote}", coude, V((xb * 1.03, yb - bl, zb - bh * 0.45)), f"Bras.{cote}")]
+    elif sorte == "quadrupede":
+        av, ar = d.get("hauteur_pattes", (hz - h * 0.2, hz - h * 0.2))
+        e = d["patte"]
+        for s, cote in ((-1, "R"), (1, "L")):
+            x = s * (w / 2 - e * 0.25)
+            for nom, y, haut, par in (("Avant", -l * 0.32, av, "Torse"), ("Arriere", l * 0.3, ar, "Bassin")):
+                genou = V((x, y, haut * 0.45))
+                os_ += [(f"Patte{nom}.{cote}", V((x, y, haut)), genou, par),
+                        (f"Pied{nom}.{cote}", genou, V((x, y - 0.1, 0.12)), f"Patte{nom}.{cote}")]
+    elif sorte == "ptero":
+        for s, cote in ((-1, "R"), (1, "L")):
+            os_ += [(f"Aile.{cote}", V((s * 0.5, -0.45, hz + 0.3)), V((s * 2.4, -0.45, hz + 0.3)), "Torse"),
+                    (f"BoutAile.{cote}", V((s * 2.4, -0.45, hz + 0.3)), V((s * 4.4, 0, hz + 0.3)), f"Aile.{cote}"),
+                    (f"Jambe.{cote}", V((s * 0.35, 0.6, hz - 0.3)), V((s * 0.35, 1.2, hz - 1.3)), "Bassin")]
+    elif sorte == "marin":
+        for s, cote in ((-1, "R"), (1, "L")):
+            for nom, y in (("Avant", -l * 0.25), ("Arriere", l * 0.25)):
+                os_.append((f"Palme{nom}.{cote}", V((s * w * 0.4, y, hz - h * 0.3)),
+                            V((s * (w * 0.4 + 1.8), y + 0.2, hz - h * 0.3)), "Torse" if nom == "Avant" else "Bassin"))
+    return os_
+
+
+# pieces qui suivent toujours la tete / restent fixes
+SUIT_TETE = ("Tete", "Collerette", "Crete", "Dome", "Licorne", "CorneNez", "CorneDemon", "Halo", "Couronne",
+             "Visiere", "Arcade", "Rainure", "Narine", "Bec", "Oeil", "Reflet", "Pupille", "Sourire", "Corne",
+             "PointeCouronne")
+FIXE = ("Socle", "Tige")
+
+
+def _dist_segment(p, a, b_):
+    ab = b_ - a
+    t = max(0.0, min(1.0, (p - a).dot(ab) / max(ab.length_squared, 1e-9)))
+    return (a + ab * t - p).length
+
+
+def lier_au_squelette(os_, b):
+    """Chaque piece suit l'os le plus proche (avec quelques regles par nom)."""
+    noms_os = [o[0] for o in os_]
+    tt = b["tete"]
+    z_bouche = tt.p(0.5, 0.0)[1]
+    for o in objets():
+        nom = o.name.split(".")[0]
+        pts = [o.matrix_world @ Vector(c) for c in o.bound_box]
+        centre = sum(pts, Vector()) / 8
+        if nom.startswith(FIXE):
+            cible = "Racine"
+        elif "Machoire" in noms_os and (nom.startswith(("Machoire", "Langue"))
+                                         or (nom.startswith("Dent") and centre.z < z_bouche
+                                             and centre.y < tt.y0)):
+            cible = "Machoire"
+        elif nom.startswith(SUIT_TETE) and _dist_segment(centre, *[x for x in os_ if x[0] == "Tete"][0][1:3]) < tt.L:
+            cible = "Tete"
+        elif nom.startswith(("Aile", "Os", "Baleine", "Aureole")) and "Aile.L" not in noms_os:
+            cible = "Torse"
+        else:
+            cible = min(os_[1:], key=lambda x: _dist_segment(centre, x[1], x[2]))[0]
+        vg = o.vertex_groups.new(name=cible)
+        vg.add(list(range(len(o.data.vertices))), 1.0, 'REPLACE')
+
+
+def creer_armature(os_, decalage_z, echelle, mesh):
+    arm = bpy.data.armatures.new("Squelette")
+    ob = lier(bpy.data.objects.new("Squelette", arm))
+    activer(ob)
+    bpy.ops.object.mode_set(mode='EDIT')
+    t = lambda v: (Vector(v) - Vector((0, 0, decalage_z))) * echelle
+    for nom, a, b_, parent in os_:
+        eb = arm.edit_bones.new(nom)
+        eb.head = t(a)
+        eb.tail = t(b_)
+        if (eb.tail - eb.head).length < 1e-3:
+            eb.tail = eb.head + Vector((0, 0, 0.1 * echelle))
+        if parent:
+            eb.parent = arm.edit_bones[parent]
+    bpy.ops.object.mode_set(mode='OBJECT')
+    mod = mesh.modifiers.new("Squelette", 'ARMATURE')
+    mod.object = ob
+    mesh.parent = ob
+    return ob
 
 
 def construire(numero, bebe=False):
