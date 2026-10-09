@@ -7,10 +7,14 @@ Le dossier "makehuman" (base.obj + morphs) doit etre a cote de ce fichier
 Sortie dans le dossier "horreur" de ton dossier utilisateur, deux versions :
   kuchisake_sourire.fbx / .glb  -> la bouche fendue jusqu'aux oreilles
   kuchisake_masque.fbx  / .glb  -> avec le masque (les cicatrices depassent)
-  kuchisake_peau.png            -> la texture de la peau (aussi incluse dans les fichiers)
+  kuchisake_*.png               -> textures (couleur + normal map peau / kimono, cheveux)
+                                   aussi incluses dans les fichiers
 
 Fortnite (UEFN) : Content Browser > Import > kuchisake_*.fbx (Skeletal Mesh, avec les animations).
-Taille : 2,20 m. Squelette humain (22 os) + 2 animations : "Attente" et "Sourire".
+Taille : 2,27 m avec les geta. Squelette humain (23 os) + 7 animations :
+  Attente, Marche, Course, Regard, Attaque, Jolie, Sourire.
+Cheveux : dans la matiere "Cheveux", mettre Blend Mode = Masked et brancher l'alpha de la texture
+sur Opacity Mask (sinon les meches sont pleines).
 
 Corps : MakeHuman (makehumancommunity.org), CC0.
 """
@@ -21,7 +25,7 @@ import os
 import random
 import urllib.request
 import numpy as np
-from mathutils import Vector, Quaternion
+from mathutils import Vector, Quaternion, Matrix
 from mathutils.bvhtree import BVHTree
 
 ICI = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
@@ -34,13 +38,16 @@ FICHIERS_MH = {
     "grande.target": "targets/macrodetails/height/female-young-minmuscle-minweight-maxheight.target",
 }
 HAUTEUR = 2.2        # en metres (Fortnite : un joueur fait environ 1,9 m)
+GETA = 0.07          # hauteur des sandales en bois : tout le corps est remonte d'autant
 TEXTURE = 2048
 VARIANTES = ("sourire", "masque")
 
 COULEURS = {
     "Peau": (214, 212, 210), "Oeil": (3, 2, 3), "Dent": (214, 204, 172),
     "Cheveux": (9, 8, 10), "Cheveux2": (17, 16, 20), "Robe": (92, 10, 18), "RobeSombre": (34, 5, 8), "Obi": (14, 12, 14),
-    "Col": (10, 9, 10), "SousCol": (222, 216, 202), "Cordon": (176, 140, 80), "Gorge": (14, 3, 5), "Masque": (226, 230, 232),
+    "Col": (10, 9, 10), "SousCol": (222, 216, 202), "Cordon": (176, 140, 80), "Gorge": (14, 3, 5), "Ongle": (16, 12, 14),
+    "Iris": (178, 176, 168), "Pupille": (3, 2, 3), "Tabi": (214, 208, 192), "Bois": (110, 78, 50),
+    "Hanao": (70, 8, 14), "Calotte": (9, 8, 10), "Masque": (226, 230, 232),
 }
 
 
@@ -147,12 +154,14 @@ def corps():
     faces = G["body"]
     utiles = sorted(set(v for f in faces for v, _ in f))
     sol, haut = B[utiles, 2].min(), B[utiles, 2].max()
-    B = (B - np.array([0, 0, sol])) * (HAUTEUR / (haut - sol))
+    B = (B - np.array([0, 0, sol])) * (HAUTEUR / (haut - sol)) + np.array([0, 0, GETA])
     centre = lambda grp: Vector(B[sorted(set(v for f in G[grp] for v, _ in f))].mean(axis=0))
     J = {g[6:]: centre(g) for g in G if g.startswith("joint-")}
     J["levres"] = (centre("helper-upper-teeth") + centre("helper-lower-teeth")) / 2
     idx = {o: n for n, o in enumerate(utiles)}
     o = mesh_depuis("Corps", B[utiles], [[idx[v] for v, _ in f] for f in faces], ["Peau"])
+    for f in o.data.polygons:
+        f.use_smooth = True
     uv = o.data.uv_layers.new(name="UV")
     k = 0
     for f in faces:
@@ -167,14 +176,15 @@ def corps():
 # ---------------------------------------------------------------------------
 def squelette(J):
     colonne = sorted([J[n] for n in ("spine-4", "spine-3", "spine-2", "spine-1")], key=lambda v: v.z)
-    os_ = [("Racine", J["ground"], J["ground"] + Vector((0, 0, 0.15)), None),
+    os_ = [("Racine", Vector((0, 0, 0)), Vector((0, 0, 0.15)), None),
            ("Bassin", J["pelvis"], colonne[1], "Racine"),
            ("Ventre", colonne[1], colonne[2], "Bassin"),
            ("Poitrine", colonne[2], colonne[3], "Ventre"),
            ("Haut", colonne[3], J["neck"], "Poitrine"),
            ("Cou", J["neck"], J["head"], "Haut"),
            ("Tete", J["head"], J["head-2"], "Cou"),
-           ("Machoire", J["mouth"], J["jaw"], "Tete")]
+           ("Machoire", J["mouth"], J["jaw"], "Tete"),
+           ("Masque", J["mouth"], J["mouth"] + Vector((0, -0.08, 0)), "Tete")]   # pour enlever le masque
     for c, s in (("L", "l"), ("R", "r")):
         bout = J[f"{s}-hand"] + ((J[f"{s}-hand-2"] + J[f"{s}-hand-3"]) / 2 - J[f"{s}-hand"]) * 2.2
         os_ += [(f"Clavicule.{c}", J[f"{s}-clavicle"], J[f"{s}-shoulder"], "Haut"),
@@ -208,20 +218,52 @@ def rot_os(arm, nom, axe_monde, degres):
     return Quaternion(axe, math.radians(degres))
 
 
-def poser(arm, rotations):
+def point_os(arm, nom, p_repos):
+    """Ou se trouve, dans la pose actuelle, un point (donne au repos) attache a un os."""
+    return arm.pose.bones[nom].matrix @ arm.data.bones[nom].matrix_local.inverted() @ Vector(p_repos)
+
+
+def ik_bras(arm, c, cible, pole):
+    """Plie le bras pour que le poignet arrive sur la cible, le coude du cote du 'pole'."""
+    pb1, pb2 = arm.pose.bones[f"Bras.{c}"], arm.pose.bones[f"AvantBras.{c}"]
+    S = pb1.head.copy()
+    L1, L2 = pb1.length, pb2.length
+    d = cible - S
+    dist = max(1e-4, min(d.length, (L1 + L2) * 0.999))
+    dn = d.normalized()
+    th = math.acos(max(-1.0, min(1.0, (L1 * L1 + dist * dist - L2 * L2) / (2 * L1 * dist))))
+    perp = (pole - dn * pole.dot(dn)).normalized()
+    coude = S + (dn * math.cos(th) + perp * math.sin(th)) * L1
+    for pb, vers in ((pb1, coude), (pb2, S + dn * dist)):
+        M = pb.matrix.copy()
+        tete_os = pb.head.copy()
+        R = M.to_3x3().col[1].normalized().rotation_difference((vers - tete_os).normalized()).to_matrix()
+        pb.matrix = Matrix.Translation(tete_os) @ (R @ M.to_3x3()).to_4x4()
+        bpy.context.view_layer.update()
+
+
+def poser(arm, rotations, positions=None, ik=None):
+    """rotations : {os: [(axe du monde, degres), ...]}   positions : {os: deplacement dans le monde}
+    ik : {cote: (fonction qui donne la cible du poignet, direction du coude)}"""
     for pb in arm.pose.bones:
         pb.rotation_mode = 'QUATERNION'
         pb.rotation_quaternion = Quaternion()
+        pb.location = (0, 0, 0)
     for nom, liste in rotations.items():
         q = Quaternion()
         for axe, deg in liste:
             q = rot_os(arm, nom, axe, deg) @ q
         arm.pose.bones[nom].rotation_quaternion = q
+    for nom, d in (positions or {}).items():
+        arm.pose.bones[nom].location = arm.data.bones[nom].matrix_local.to_3x3().inverted() @ Vector(d)
     bpy.context.view_layer.update()
+    for c, (cible, pole) in (ik or {}).items():
+        ik_bras(arm, c, cible(), Vector(pole))
 
 
-def pose_A(corps_, arm):
-    """Les bras de MakeHuman sont presque a l'horizontale : on les descend (pose en A, 50 degres)."""
+def pose_A(corps_, arm, J):
+    """Les bras de MakeHuman sont presque a l'horizontale : on les descend (pose en A, 50 degres),
+    et les jambes sont resserrees. Les reperes des mains et des pieds suivent."""
     rot = {}
     for c, s in (("L", 1), ("R", -1)):
         b = arm.data.bones[f"Bras.{c}"]
@@ -232,6 +274,13 @@ def pose_A(corps_, arm):
         d = (arm.data.bones[f"Tibia.{c}"].tail_local - b.head_local).normalized()
         rot[f"Cuisse.{c}"] = [((0, 1, 0), s * (math.degrees(math.atan2(abs(d.x), -d.z)) - 2))]  # jambes serrees
     poser(arm, rot)
+    for c, s in (("L", "l"), ("R", "r")):
+        for os_nom, prefixes in ((f"Main.{c}", (f"{s}-hand", f"{s}-finger")), (f"AvantBras.{c}", (f"{s}-elbow",)),
+                                 (f"Pied.{c}", (f"{s}-ankle", f"{s}-foot", f"{s}-toe")), (f"Tibia.{c}", (f"{s}-knee",))):
+            M = arm.pose.bones[os_nom].matrix @ arm.data.bones[os_nom].matrix_local.inverted()
+            for k in list(J):
+                if k.startswith(prefixes):
+                    J[k] = M @ J[k]
     mod = next(m for m in corps_.modifiers if m.type == 'ARMATURE')
     activer(corps_)
     bpy.ops.object.modifier_copy(modifier=mod.name)
@@ -240,6 +289,70 @@ def pose_A(corps_, arm):
     bpy.ops.object.mode_set(mode='POSE')
     bpy.ops.pose.armature_apply(selected=False)
     bpy.ops.object.mode_set(mode='OBJECT')
+
+
+def mains_longues(corps_, J):
+    """Doigts plus longs (+22 %) et plus fins : des mains osseuses."""
+    me = corps_.data
+    noms = {g.index: g.name for g in corps_.vertex_groups}
+    for c, s in (("L", "l"), ("R", "r")):
+        doigts = []
+        for k in range(1, 6):
+            a, b = J[f"{s}-finger-{k}-1"], J[f"{s}-finger-{k}-4"]
+            doigts.append((a, (b - a).length, (b - a).normalized()))
+        for v in me.vertices:
+            g = max(v.groups, key=lambda g: g.weight, default=None)
+            if g is None or noms[g.group] != f"Main.{c}":
+                continue
+            p = v.co.copy()
+            meilleur = None
+            for a, L, d in doigts:
+                t = (p - a).dot(d) / L
+                dist = (p - (a + d * (max(0.0, min(1.0, t)) * L))).length
+                if meilleur is None or dist < meilleur[0]:
+                    meilleur = (dist, t, a, d, L)
+            _, t, a, d, L = meilleur
+            if t <= 0:
+                continue
+            axe = a + d * (t * L)
+            v.co = axe + d * (t * L * 0.22) + (p - axe) * (1 - 0.12 * min(1.0, t * 3))
+        for k in range(1, 6):
+            a, L, d = doigts[k - 1]
+            for j in (3, 4):
+                q = J[f"{s}-finger-{k}-{j}"]
+                J[f"{s}-finger-{k}-{j}"] = q + d * ((q - a).dot(d) * 0.22)
+    me.update()
+
+
+def griffes(J):
+    """Longs ongles noirs et pointus au bout de chaque doigt."""
+    bm = bmesh.new()
+    nb = {}
+    for c, s in (("L", "l"), ("R", "r")):
+        avant = len(bm.verts)
+        for k in range(1, 6):
+            D, T = J[f"{s}-finger-{k}-3"], J[f"{s}-finger-{k}-4"]
+            d = (T - D).normalized()
+            base = D + (T - D) * 0.5
+            pointe = T + d * (0.022 if k == 1 else 0.032) - Vector((0, 0, 0.004))
+            a = d.orthogonal().normalized()
+            b = d.cross(a)
+            anneau = [bm.verts.new(base + (a * math.cos(t) + b * math.sin(t)) * 0.0045)
+                      for t in np.linspace(0, 2 * math.pi, 7)[:-1]]
+            pv = bm.verts.new(pointe)
+            for i in range(6):
+                bm.faces.new((anneau[i], anneau[(i + 1) % 6], pv))
+            bm.faces.new(anneau[::-1])
+        nb[c] = (avant, len(bm.verts))
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new("Griffes")
+    bm.to_mesh(me)
+    bm.free()
+    o = lier(bpy.data.objects.new("Griffes", me))
+    me.materials.append(matiere("Ongle", 0.25))
+    for c, (a, b) in nb.items():
+        o.vertex_groups.new(name=f"Main.{c}").add(list(range(a, b)), 1.0, 'REPLACE')
+    return [o]
 
 
 # ---------------------------------------------------------------------------
@@ -280,28 +393,36 @@ def subdiviser_tete(corps_, V):
 
 
 def sculpter(corps_, V):
-    """Orbites enfoncees + une fente creusee le long du sourire."""
+    """Orbites enfoncees, joues creuses, une fente creusee le long du sourire et des bords de plaie gonfles."""
     me = corps_.data
+    e = V.e
     for v in me.vertices:
         p = v.co
         if p.z < V.cou or p.y > V.C.y:
             continue
         pousse = 0.0
         for y in V.yeux:
-            dx, dz = (p.x - y.x) / (0.4 * V.e), (p.z - y.z) / (0.32 * V.e)
+            dx, dz = (p.x - y.x) / (0.4 * e), (p.z - y.z) / (0.32 * e)
             r = math.hypot(dx, dz)
             if r < 1.6:
                 f = (1 - r / 1.6) ** 1.4 * (0.55 if dz > 0.7 else 1.0)
-                pousse = max(pousse, 0.06 * V.e * f)
+                pousse = max(pousse, 0.06 * e * f)
+        for sgn in (1, -1):                                   # joues creusees
+            r = math.hypot(p.x - (V.M.x + sgn * 0.8 * e), p.z - (V.M.z + 0.05 * e)) / (0.45 * e)
+            if r < 1:
+                pousse = max(pousse, 0.05 * e * (1 - r) ** 2)
+        gonfle = 0.0
         t = (p.x - V.M.x) / V.larg
         if abs(t) < 1.12:
             dz = abs(p.z - V.M.z - V.courbe(t))
-            h = V.demi(t) + 0.035 * V.e
+            h = V.demi(t) + 0.035 * e
             if dz < h:
-                prof = V.e * (0.035 + 0.11 * max(0.0, 1 - abs(t)))
+                prof = e * (0.035 + 0.11 * max(0.0, 1 - abs(t)))
                 pousse = max(pousse, prof * (1 - (dz / h) ** 2))
-        if pousse:
-            v.co = p + Vector((0, pousse, 0))
+            elif dz < h + 0.06 * e:                           # bords de la plaie gonfles
+                gonfle = 0.018 * e * (1 - abs(dz - h - 0.03 * e) / (0.03 * e))
+        if pousse or gonfle:
+            v.co = p + Vector((0, pousse - gonfle, 0))
     me.update()
 
 
@@ -399,6 +520,46 @@ def poser_texture(o, nom, rgb, rugosite):
         p.material_index = 0
 
 
+def carte_normale(o, hauteur, distance, nom):
+    """Relief fin (pores, rides, coutures, broderies...) : la hauteur calculee pour chaque pixel
+    devient une normal map (cuite par Blender), branchee sur la matiere et exportee avec elle."""
+    T = TEXTURE
+    h = np.clip(hauteur, -1, 1) * 0.5 + 0.5
+    img_h = bpy.data.images.new(nom + "_hauteur", T, T, alpha=False, float_buffer=True)
+    img_h.colorspace_settings.name = "Non-Color"
+    img_h.pixels.foreach_set(np.stack([h, h, h, np.ones_like(h)], 1).astype(np.float32).ravel())
+    m = o.data.materials[0]
+    nt = m.node_tree
+    bsdf = nt.nodes["Principled BSDF"]
+    th = nt.nodes.new("ShaderNodeTexImage")
+    th.image = img_h
+    th.interpolation = 'Cubic'
+    bosse = nt.nodes.new("ShaderNodeBump")
+    bosse.inputs["Distance"].default_value = distance
+    nt.links.new(th.outputs["Color"], bosse.inputs["Height"])
+    nt.links.new(bosse.outputs["Normal"], bsdf.inputs["Normal"])
+    img_n = bpy.data.images.new(nom, T, T, alpha=False)
+    img_n.colorspace_settings.name = "Non-Color"
+    tn = nt.nodes.new("ShaderNodeTexImage")
+    tn.image = img_n
+    nt.nodes.active = tn
+    sc = bpy.context.scene
+    sc.cycles.samples = 4
+    activer(o)
+    bpy.ops.object.bake(type='NORMAL', normal_space='TANGENT', margin=8, use_clear=True)
+    nt.nodes.remove(bosse)
+    nt.nodes.remove(th)
+    bpy.data.images.remove(img_h)
+    img_n.filepath_raw = os.path.join(SORTIE, nom + ".png")
+    img_n.file_format = 'PNG'
+    img_n.save()
+    img_n.pack()
+    nm = nt.nodes.new("ShaderNodeNormalMap")
+    nm.uv_map = "UV"
+    nt.links.new(tn.outputs["Color"], nm.inputs["Color"])
+    nt.links.new(nm.outputs["Normal"], bsdf.inputs["Normal"])
+
+
 def melange(col, couleur, alpha):
     alpha = np.clip(alpha, 0, 1)[:, None]
     return col * (1 - alpha) + np.array(couleur) * alpha
@@ -410,8 +571,9 @@ def dist_segment(px, pz, a, b):
     return np.hypot(px - a[0] - t * ab[0], pz - a[1] - t * ab[1])
 
 
-def peindre_peau(corps_, V):
-    """Le visage est peint pixel par pixel a partir de la position 3D de chaque pixel de la texture."""
+def peindre_peau(corps_, V, J):
+    """Le visage est peint pixel par pixel a partir de la position 3D de chaque pixel de la texture.
+    En meme temps on calcule le relief (normal map) : pores, rides, bords de plaie, fils de suture."""
     P = position_pixels(corps_)
     ao = occlusion_pixels(corps_, 0.6 * V.e, 32)
     x, y, z = P[:, 0], P[:, 1], P[:, 2]
@@ -420,19 +582,30 @@ def peindre_peau(corps_, V):
     col = np.tile(np.array([0.80, 0.80, 0.80]), (P.shape[0], 1))
     col = col * (1 + 0.035 * bruit(P, 9 / e, 1)[:, None] + 0.02 * bruit(P, 140 / e, 4)[:, None]) \
         + np.array([-0.02, 0.0, 0.025]) * bruit(P, 3 / e, 2)[:, None]
+    haut = 0.06 * bruit(P, 260 / e, 41) + 0.05 * bruit(P, 90 / e, 42)
     devant = lisse01(V.C.y + 0.3 * e, V.C.y - 0.3 * e, y) * (z > V.cou - 0.2 * e)
     fx, fz = x - V.M.x, z - V.M.z
-    # veines bleutees : tempes, cotes du visage, cou
+    # veines bleutees (un peu en relief) : tempes, cotes du visage, cou
     veine = lisse01(0.1, 0.0, np.abs(bruit(P, 22 / e, 7)))
     zone = np.maximum(lisse01(0.7 * e, 1.2 * e, np.abs(x)) * (z > V.M.z),
                       lisse01(V.cou + 0.4 * e, V.cou, z) * lisse01(V.cou - 1.6 * e, V.cou - 0.8 * e, z))
     col = melange(col, (0.40, 0.42, 0.56), veine * zone * 0.4)
+    haut += 0.3 * veine * zone
+    # rides du front
+    for k in range(3):
+        zc = V.yeux[0].z + (0.85 + 0.13 * k) * e + 0.03 * e * np.sin(x / e * 4 + k)
+        haut -= 0.35 * lisse01(0.016 * e, 0.0, np.abs(z - zc)) * np.clip(1 - np.abs(x) / (0.9 * e), 0, 1) * devant
     for k, oe in enumerate(V.yeux):
         r = np.sqrt(((x - oe.x) / (0.42 * e)) ** 2 + ((z - oe.z) / (0.32 * e)) ** 2)
         # cernes violets, orbites noires, paupieres rougies
         col = melange(col, (0.42, 0.33, 0.38), lisse01(2.3, 1.2, r) * 0.75 * devant)
         col = melange(col, (0.02, 0.01, 0.015), lisse01(1.45, 0.75, r) * devant)
         col = melange(col, (0.45, 0.14, 0.18), lisse01(0.95, 1.1, r) * lisse01(1.4, 1.2, r) * 0.3 * devant)
+        # rides sous les yeux (poches)
+        dx = (x - oe.x) / (0.45 * e)
+        for j in range(3):
+            zc = oe.z - (0.42 + 0.09 * j) * e + 0.12 * e * dx ** 2
+            haut -= 0.4 * lisse01(0.014 * e, 0.0, np.abs(z - zc)) * np.clip(1 - np.abs(dx) / 1.1, 0, 1) * devant
         # larmes noires
         rng = np.random.default_rng(10 + k)
         for _ in range(3):
@@ -452,7 +625,9 @@ def peindre_peau(corps_, V):
     col = melange(col, (0.48, 0.05, 0.08), lisse01(dem + 0.06 * e, dem + 0.03 * e, dzs) * dans)
     col = melange(col, (0.20, 0.02, 0.04), lisse01(dem, dem * 0.6, dzs) * dans)
     col = melange(col, (0.06, 0.0, 0.01), lisse01(dem * 0.7, dem * 0.2, dzs) * dans)
-    # points de suture en croix sur les joues
+    haut -= 0.9 * lisse01(dem + 0.01 * e, dem * 0.5, dzs) * dans
+    haut += 0.7 * np.exp(-((dzs - dem - 0.035 * e) / (0.02 * e)) ** 2) * dans * (1 + 0.4 * bruit(P, 80 / e, 43))
+    # points de suture en croix sur les joues (fils en relief, trous, peau qui tire)
     for sgn in (1, -1):
         for tk in np.arange(0.45, 1.07, 0.075):
             xk, zc = sgn * tk * V.larg, float(V.courbe(tk))
@@ -466,10 +641,16 @@ def peindre_peau(corps_, V):
                 fil = np.zeros(len(x))
                 fil[sel] = lisse01(0.014 * e, 0.007 * e, d)
                 col = melange(col, (0.07, 0.05, 0.06), fil)
+                haut += 0.8 * fil
                 for bout in (a, b):
+                    rr = np.hypot(fx[sel] - bout[0], fz[sel] - bout[1])
                     trou = np.zeros(len(x))
-                    trou[sel] = lisse01(0.03 * e, 0.012 * e, np.hypot(fx[sel] - bout[0], fz[sel] - bout[1]))
+                    trou[sel] = lisse01(0.03 * e, 0.012 * e, rr)
                     col = melange(col, (0.45, 0.08, 0.1), trou * 0.6)
+                    pli = np.zeros(len(x))
+                    ang = np.arctan2(fz[sel] - bout[1], fx[sel] - bout[0])
+                    pli[sel] = 0.25 * np.sin(ang * 7) * lisse01(0.07 * e, 0.02 * e, rr)
+                    haut += pli - 0.6 * trou
     # quelques coulures sous la bouche
     rng = np.random.default_rng(5)
     for _ in range(7):
@@ -481,8 +662,29 @@ def peindre_peau(corps_, V):
         u = np.clip((zs - fz) / lg, 0, 1)
         trait = (np.abs(fx - xs) < w * (1.2 - 0.5 * u)) & (fz < zs) & (fz > zs - lg)
         col = melange(col, (0.30, 0.02, 0.04), trait * devant * 0.9)
+        haut += 0.15 * trait * devant
+    # mains sales : crasse vers le bout des doigts, sang sous les ongles, articulations marquees
+    for s in "lr":
+        W = J[f"{s}-hand"]
+        bout = sum((J[f"{s}-finger-{k}-4"] for k in range(2, 6)), Vector()) / 4
+        d = bout - W
+        L = d.length
+        d = d.normalized()
+        rel = P - np.array(W)
+        t = rel @ np.array(d) / L
+        dist = np.linalg.norm(rel - np.outer(t * L, np.array(d)), axis=1)
+        main = (t > -0.1) & (t < 1.3) & (dist < 0.08)
+        crasse = lisse01(0.25, 1.0, t) * lisse01(0.7, 1.5, bruit(P, 120, 51) + 1.0) * main
+        col = melange(col, (0.33, 0.28, 0.26), crasse * 0.7)
+        col = melange(col, (0.32, 0.03, 0.05), lisse01(0.85, 1.0, t) * main * 0.6)
+        for k in range(2, 6):
+            a = J[f"{s}-finger-{k}-2"]
+            rr = np.linalg.norm(P - np.array(a), axis=1)
+            col = melange(col, (0.55, 0.42, 0.45), lisse01(0.012, 0.004, rr) * 0.5)
+            haut -= 0.4 * lisse01(0.012, 0.0, rr) * (0.5 + 0.5 * np.sin((P @ np.array(d)) * 2500))
     col *= (0.5 + 0.5 * ao)[:, None]
     poser_texture(corps_, "kuchisake_peau", col, 0.45)
+    carte_normale(corps_, haut, 0.0015, "kuchisake_peau_normal")
 
 
 def gorge(V):
@@ -544,6 +746,7 @@ def masque(corps_, V):
     s.thickness = 0.02 * e
     appliquer_modif(o, s)
     bpy.ops.object.shade_smooth()
+    o.vertex_groups.new(name="Masque").add(list(range(len(o.data.vertices))), 1.0, 'REPLACE')
     objs = [o]
     for sgn, i in ((1, nx), (-1, 0)):
         for j in (int(nz * 0.85), int(nz * 0.15)):
@@ -560,23 +763,48 @@ def masque(corps_, V):
             bm.free()
             el = lier(bpy.data.objects.new("Elastique", me))
             me.materials.append(matiere("Masque"))
-            el.vertex_groups.new(name="Tete").add(list(range(8)), 1.0, 'REPLACE')
+            el.vertex_groups.new(name="Masque").add(list(range(8)), 1.0, 'REPLACE')
             objs.append(el)
     return objs
 
 
 def yeux_noirs(V):
+    """Globes noirs et brillants (humides), avec un iris laiteux minuscule : elle te fixe."""
     objs = []
+    e = V.e
     for y in V.yeux:
-        bpy.ops.mesh.primitive_uv_sphere_add(segments=20, ring_count=12, radius=0.23 * V.e,
-                                             location=y + Vector((0, 0.02 * V.e, 0)))
+        bpy.ops.mesh.primitive_uv_sphere_add(segments=20, ring_count=12, radius=0.23 * e,
+                                             location=y + Vector((0, 0.02 * e, 0)))
         o = bpy.context.active_object
         o.name = "Oeil"
-        o.data.materials.append(matiere("Oeil", 0.15))
+        o.data.materials.append(matiere("Oeil", 0.05))
         bpy.ops.object.shade_smooth()
         bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
         o.vertex_groups.new(name="Tete").add(list(range(len(o.data.vertices))), 1.0, 'REPLACE')
         objs.append(o)
+        # iris pale + pupille en tete d'epingle, poses sur l'avant du globe
+        bm = bmesh.new()
+        c = y + Vector((0, 0.02 * e - 0.23 * e - 0.004 * e, 0))
+        creux = lambda r: r * r / (2 * 0.23 * e)
+        n = 24
+        centre = bm.verts.new(c)
+        r1 = [bm.verts.new(c + Vector((math.cos(a) * 0.028 * e, creux(0.028 * e), math.sin(a) * 0.028 * e)))
+              for a in np.linspace(0, 2 * math.pi, n + 1)[:-1]]
+        r2 = [bm.verts.new(c + Vector((math.cos(a) * 0.075 * e, creux(0.075 * e), math.sin(a) * 0.075 * e)))
+              for a in np.linspace(0, 2 * math.pi, n + 1)[:-1]]
+        for i in range(n):
+            j = (i + 1) % n
+            f = bm.faces.new((centre, r1[i], r1[j]))
+            f.material_index = 1
+            bm.faces.new((r1[i], r2[i], r2[j], r1[j]))
+        me = bpy.data.meshes.new("Iris")
+        bm.to_mesh(me)
+        bm.free()
+        ir = lier(bpy.data.objects.new("Iris", me))
+        me.materials.append(matiere("Iris", 0.05))
+        me.materials.append(matiere("Pupille", 0.05))
+        ir.vertex_groups.new(name="Tete").add(list(range(len(me.vertices))), 1.0, 'REPLACE')
+        objs.append(ir)
     return objs
 
 
@@ -677,8 +905,41 @@ def coquille(corps_, garder, decalage, nom, mat, lissage=8, epaisseur=None):
     return o
 
 
-def tube(nom, anneaux, mats, epaisseur, poids=None, mat_anneau=None):
-    """Surface faite d'anneaux de points (manches, jupe, obi), avec une epaisseur."""
+def simuler_tissu(o, epingles, images=40):
+    """Simulation de tissu (soie) : la piece tombe sous son poids, fait des plis et se pose sur le corps.
+    epingles : {indice de sommet: poids} des sommets qui restent accroches."""
+    vg = o.vertex_groups.new(name="Epingle")
+    for i, w in epingles.items():
+        vg.add([i], w, 'REPLACE')
+    mod = o.modifiers.new("Tissu", 'CLOTH')
+    st = mod.settings
+    st.quality = 7
+    st.mass = 0.15
+    st.air_damping = 2.0
+    st.tension_stiffness = 20
+    st.compression_stiffness = 20
+    st.shear_stiffness = 8
+    st.bending_stiffness = 0.08
+    st.vertex_group_mass = "Epingle"
+    cs = mod.collision_settings
+    cs.distance_min = 0.004
+    cs.use_self_collision = True
+    cs.self_distance_min = 0.003
+    mod.point_cache.frame_start = 1
+    mod.point_cache.frame_end = images
+    sc = bpy.context.scene
+    sc.frame_start, sc.frame_end = 1, images
+    for f in range(1, images + 1):
+        sc.frame_set(f)
+    activer(o)
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+    o.vertex_groups.remove(o.vertex_groups["Epingle"])
+    sc.frame_set(1)
+
+
+def tube(nom, anneaux, mats, epaisseur, poids=None, mat_anneau=None, epingles=None):
+    """Surface faite d'anneaux de points (manches, jupe, obi), avec une epaisseur.
+    epingles(anneau, i) -> poids : si donne, la piece est simulee comme un vrai tissu."""
     n = len(anneaux[0])
     vs = [tuple(p) for a in anneaux for p in a]
     fs = []
@@ -700,6 +961,9 @@ def tube(nom, anneaux, mats, epaisseur, poids=None, mat_anneau=None):
     bpy.ops.mesh.select_all(action='SELECT')
     bpy.ops.mesh.normals_make_consistent(inside=False)
     bpy.ops.object.mode_set(mode='OBJECT')
+    if epingles:
+        simuler_tissu(o, {a * n + i: epingles(a, i) for a in range(len(anneaux)) for i in range(n)
+                          if epingles(a, i) > 0})
     s = o.modifiers.new("Epaisseur", 'SOLIDIFY')
     s.thickness = epaisseur
     s.offset = -1
@@ -708,12 +972,41 @@ def tube(nom, anneaux, mats, epaisseur, poids=None, mat_anneau=None):
     return o
 
 
+def boite_arrondie(nom, centre, taille, mat, arrondi=0.004):
+    bpy.ops.mesh.primitive_cube_add(size=1, location=centre)
+    o = bpy.context.active_object
+    o.name = nom
+    o.scale = taille
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    b = o.modifiers.new("Arrondi", 'BEVEL')
+    b.width = arrondi
+    b.segments = 2
+    appliquer_modif(o, b)
+    bpy.ops.object.shade_smooth()
+    o.data.materials.append(matiere(mat))
+    return o
+
+
+def cordelette(nom, pts, rayon, mat):
+    anneaux = []
+    for i, p in enumerate(pts):
+        tg = (pts[min(i + 1, len(pts) - 1)] - pts[max(i - 1, 0)]).normalized()
+        a = tg.orthogonal().normalized()
+        b = tg.cross(a)
+        anneaux.append([p + (a * math.cos(t) + b * math.sin(t)) * rayon for t in np.linspace(0, 2 * math.pi, 9)[:-1]])
+    return tube(nom, anneaux, [mat], rayon * 0.3)
+
+
 def ruban(nom, pts, normales, largeur, mat, epaisseur):
     """Bande posee sur une surface (col du kimono)."""
     vs, fs, N = [], [], len(pts)
+    prec = None
     for i, p in enumerate(pts):
         tg = (pts[min(i + 1, N - 1)] - pts[max(i - 1, 0)]).normalized()
         w = tg.cross(normales[i]).normalized()
+        if prec is not None and w.dot(prec) < 0:
+            w = -w
+        prec = w
         vs += [p - w * largeur / 2, p + w * largeur / 2]
     for i in range(N - 1):
         fs.append([2 * i, 2 * i + 1, 2 * i + 3, 2 * i + 2])
@@ -773,6 +1066,9 @@ def kimono(corps_, V, J, arm):
         return True
 
     objs = []
+    collision = corps_.modifiers.new("Collision", 'COLLISION')
+    corps_.collision.thickness_outer = 0.004
+    peau = bvh(corps_)
     haut = coquille(corps_, couvert, 0.12 * e, "Kimono", "Robe", lissage=12, epaisseur=0.03 * e)
     objs.append(haut)
     caches = {p.index for p in me.polygons if couvert(p)}
@@ -784,7 +1080,7 @@ def kimono(corps_, V, J, arm):
         S, E, W = bras[c]
         L1, L2 = (E - S).length, (W - E).length
         anneaux, info = [], []
-        K, M = 16, 28
+        K, M = 24, 40
         for k in range(K + 1):
             u = k / K
             s = 0.2 * L1 + u * (L1 + L2 - 0.2 * L1 - 0.03 * L2)
@@ -809,7 +1105,8 @@ def kimono(corps_, V, J, arm):
             f2 = max(0.0, (s - L1) / L2)
             wa = float(lisse01(0.0, 0.35, f2))
             info.append({f"Bras.{c}": 1 - wa, f"AvantBras.{c}": wa})
-        objs.append(tube(f"Manche.{c}", anneaux, ["Robe"], 0.03 * e, poids=lambda a, info=info: info[a]))
+        objs.append(tube(f"Manche.{c}", anneaux, ["Robe"], 0.03 * e, poids=lambda a, info=info: info[a],
+                         epingles=lambda a, i, M=M: 1.0 if a == 0 or math.sin(2 * math.pi * i / M) < 0.1 else 0.0))
         manche_bas = min(manche_bas, min(p.z for ann in anneaux for p in ann))
         for p in me.polygons:   # le bras sous la manche ne se voit pas
             doms = {dominant[i] for i in p.vertices}
@@ -823,7 +1120,7 @@ def kimono(corps_, V, J, arm):
     z_haut_jupe = z0 + 0.4 * e
     z1 = J["l-ankle"].z + 0.45 * e
     cy = J["pelvis"].y
-    n, nb = 64, 26
+    n, nb = 96, 40
     R, prec = [], None
     for a in range(nb + 1):
         z = z_haut_jupe + (z1 - z_haut_jupe) * a / nb
@@ -860,7 +1157,7 @@ def kimono(corps_, V, J, arm):
         return {"Bassin": 1 - 0.55 * t, "Cuisse.L": 0.275 * t, "Cuisse.R": 0.275 * t}
 
     jupe = tube("Jupe", anneaux, ["Robe", "RobeSombre"], 0.03 * e, poids=poids_jupe,
-                mat_anneau=lambda a: 1 if a >= nb - 1 else 0)
+                mat_anneau=lambda a: 1 if a >= nb - 1 else 0, epingles=lambda a, i: 1.0 if a <= 1 else 0.0)
     for v in jupe.data.vertices:      # chaque cote suit sa jambe
         t = float(np.clip((z_haut_jupe - v.co.z) / (z_haut_jupe - z1), 0, 1))
         cote = float(lisse01(-1.5 * hanche, 1.5 * hanche, v.co.x))
@@ -927,8 +1224,49 @@ def kimono(corps_, V, J, arm):
         o.vertex_groups.new(name="Ventre").add(list(range(len(o.data.vertices))), 1.0, 'REPLACE')
         objs.append(o)
 
+    # --- tabi (chaussettes japonaises) et geta (sandales en bois) ---------------------
+    z_cheville = J["l-ankle"].z + 0.6 * e
+
+    def pied(p):
+        doms = {dominant[i] for i in p.vertices}
+        return doms <= {"Pied.L", "Pied.R", "Tibia.L", "Tibia.R"} and p.center.z < z_cheville
+
+    tabi = coquille(corps_, pied, 0.04 * e, "Tabi", "Tabi", lissage=4, epaisseur=0.03)
+    r = tabi.modifiers.new("Chaussette", 'REMESH')          # les orteils se fondent dans la chaussette
+    r.mode = 'VOXEL'
+    r.voxel_size = 0.004
+    appliquer_modif(tabi, r)
+    l = tabi.modifiers.new("Lisse", 'LAPLACIANSMOOTH')
+    l.iterations = 4
+    l.lambda_factor = 0.5
+    appliquer_modif(tabi, l)
+    d = tabi.modifiers.new("Alleger", 'DECIMATE')          # ~4000 triangles suffisent
+    d.ratio = min(1.0, 4000 / max(1, sum(len(f.vertices) - 2 for f in tabi.data.polygons)))
+    appliquer_modif(tabi, d)
+    bpy.ops.object.shade_smooth()
+    objs.append(tabi)
+    caches |= {p.index for p in me.polygons if pied(p)}
+    for c, sgn in (("L", 1), ("R", -1)):
+        co = np.array([me.vertices[i].co for i, d in enumerate(dominant) if d == f"Pied.{c}"])
+        x0, x1, y0, y1 = co[:, 0].min(), co[:, 0].max(), co[:, 1].min(), co[:, 1].max()
+        xc, yc, Lp, Wp = (x0 + x1) / 2, (y0 + y1) / 2, y1 - y0, x1 - x0
+        morceaux = [boite_arrondie("Geta", (xc, yc, GETA - 0.0135), (Wp + 0.02, Lp + 0.03, 0.022), "Bois")]
+        for f in (0.2, 0.75):
+            morceaux.append(boite_arrondie("Geta", (xc, y0 - 0.015 + f * (Lp + 0.03), (GETA - 0.024) / 2),
+                                           (Wp + 0.02, 0.018, GETA - 0.024), "Bois"))
+        A = Vector((xc - sgn * 0.2 * Wp, y0 + 0.14 * Lp, GETA - 0.002))
+        hit = peau.ray_cast(Vector((xc, y0 + 0.4 * Lp, GETA + 0.3)), Vector((0, 0, -1)))[0]
+        sommet = (hit if hit else Vector((xc, y0 + 0.4 * Lp, GETA + 0.05))) + Vector((0, 0, 0.009))
+        for cx in (x0 - 0.005, x1 + 0.005):
+            S = Vector((cx, y0 + 0.6 * Lp, GETA - 0.002))
+            C = sommet * 2 - (A + S) / 2
+            pts = [A * (1 - t) ** 2 + C * 2 * t * (1 - t) + S * t * t for t in np.linspace(0, 1, 14)]
+            morceaux.append(cordelette("Hanao", pts, 0.005, "Hanao"))
+        for o in morceaux:
+            o.vertex_groups.new(name=f"Pied.{c}").add(list(range(len(o.data.vertices))), 1.0, 'REPLACE')
+        objs += morceaux
+
     # --- col croise : bande noire sur un sous-col blanc ------------------------------
-    peau = bvh(corps_)
 
     def poser_sur(x, z, direction):
         d = direction.normalized()
@@ -965,6 +1303,7 @@ def kimono(corps_, V, J, arm):
                 nrm = [nrm[0]] + [(nrm[i - 1] + nrm[i] * 2 + nrm[i + 1]).normalized() for i in range(1, len(nrm) - 1)] + [nrm[-1]]
             objs.append(ruban(nom, pts, nrm, larg * e, mat, ep * e))
     caches = eroder(me, caches, 3)
+    corps_.modifiers.remove(collision)
     infos = dict(cy=cy, z1=z1, z_obi=z_obi, z_bas_obi=z0 - 0.35 * e, manche_bas=manche_bas, cou=J["neck"].z)
     return objs, caches, J["pelvis"].z + 2.5 * e, infos
 
@@ -992,7 +1331,7 @@ def seigaiha(u, z, R):
     return best
 
 
-def higanbana(col, sel, u, z, cu, cz, R, theta0, tige, rng):
+def higanbana(col, haut, sel, u, z, cu, cz, R, theta0, tige):
     """Lys araignee (fleur des morts) : 6 petales enroules noirs bordes d'or + longues etamines."""
     or_ = (0.62, 0.47, 0.22)
     noir = (0.05, 0.01, 0.015)
@@ -1002,9 +1341,10 @@ def higanbana(col, sel, u, z, cu, cz, R, theta0, tige, rng):
     a = np.zeros(len(u))
     a[zone] = lisse01(0.0035, 0.002, np.abs(u[zone] - cu - ondule[zone]))
     col = melange(col, noir, a)
+    haut += 0.4 * a
     zone = sel & (np.abs(u - cu) < 1.3 * R) & (np.abs(z - cz) < 1.3 * R)
     if not zone.any():
-        return col
+        return col, haut
     du, dz = (u[zone] - cu) / R, (z[zone] - cz) / R
     r = np.hypot(du, dz)
     th = np.arctan2(dz, du)
@@ -1029,7 +1369,8 @@ def higanbana(col, sel, u, z, cu, cz, R, theta0, tige, rng):
     tmp = melange(tmp, noir, petale)
     tmp = melange(tmp, or_, eta * (1 - petale))
     col[zone] = tmp
-    return col
+    haut[zone] += 0.5 * petale + 0.8 * bord * (1 - petale) + 0.6 * eta * (1 - petale)
+    return col, haut
 
 
 def peindre_tissu(o, I, e):
@@ -1051,18 +1392,22 @@ def peindre_tissu(o, I, e):
     x, y, z = P[:, 0], P[:, 1], P[:, 2]
     u = np.arctan2(x, -(y - I["cy"])) * 0.25          # coordonnee "deroulee" autour du corps
     base = {"Robe": (0.36, 0.04, 0.07), "RobeSombre": (0.13, 0.02, 0.03), "Obi": (0.055, 0.047, 0.055),
-            "Col": (0.04, 0.035, 0.04), "SousCol": (0.86, 0.84, 0.78), "Cordon": (0.69, 0.55, 0.31)}
+            "Col": (0.04, 0.035, 0.04), "SousCol": (0.86, 0.84, 0.78), "Cordon": (0.69, 0.55, 0.31),
+            "Tabi": (0.84, 0.82, 0.75), "Bois": (0.43, 0.31, 0.2), "Hanao": (0.27, 0.03, 0.05)}
     col = np.array([base.get(n, (0.5, 0.5, 0.5)) for n in noms])[K]
     est = {n: K == i for i, n in enumerate(noms)}
     vide = np.zeros(len(K), dtype=bool)
     robe = est.get("Robe", vide)
     # grain de la soie (serge) + variations
-    grain = 1 + 0.05 * bruit(P, 30, 31) + 0.035 * np.sin(2 * np.pi * (u * 0.7 + z) / 0.005)
+    serge = np.sin(2 * np.pi * (u * 0.7 + z) / 0.005)
+    grain = 1 + 0.05 * bruit(P, 30, 31) + 0.035 * serge
     col *= grain[:, None]
+    haut = 0.25 * serge + 0.1 * bruit(P, 300, 61)
     # vagues seigaiha, ton sur ton
     d = seigaiha(u, z, 0.035)
     anneau = np.abs(d * 4 - np.round(d * 4))
     col = np.where(robe[:, None], col * (1 - 0.28 * lisse01(0.1, 0.03, anneau))[:, None], col)
+    haut -= 0.3 * lisse01(0.1, 0.03, anneau) * robe
     # lys araignees
     rng = np.random.default_rng(13)
     fleurs = []
@@ -1074,8 +1419,8 @@ def peindre_tissu(o, I, e):
         fleurs.append((rng.choice([-1, 1]) * rng.uniform(0.1, 0.2), rng.uniform(I["z_obi"] + 0.05, I["z_obi"] + 0.15)))
     sel = robe & (np.abs(Nn[:, 2]) < 0.85)
     for cu, cz in fleurs:
-        col = higanbana(col, sel, u, z, cu, cz, rng.uniform(0.07, 0.11), rng.uniform(0, 6.28),
-                        rng.uniform(0.08, 0.3), rng)
+        col, haut = higanbana(col, haut, sel, u, z, cu, cz, rng.uniform(0.07, 0.11), rng.uniform(0, 6.28),
+                              rng.uniform(0.08, 0.3))
     # salissures en bas du kimono et des manches
     tache = lisse01(0.7, 1.4, bruit(P, 9, 21)) * np.maximum(lisse01(I["z1"] + 0.5, I["z1"], z),
                                                             lisse01(I["manche_bas"] + 0.25, I["manche_bas"], z))
@@ -1088,8 +1433,20 @@ def peindre_tissu(o, I, e):
     b = np.abs(np.mod(z / 0.035, 1) - 0.5) * 2
     losange = lisse01(0.12, 0.05, np.abs(a + b - 1)) * ((zr > 0.2) & (zr < 0.8) | (zr < -0.05) | (zr > 1.05))
     col = melange(col, (0.55, 0.42, 0.2), (filet * 0.9 + losange * 0.6) * obi)
+    haut += (0.8 * filet + 0.6 * losange) * obi
     cordon = est.get("Cordon", vide)
-    col = np.where(cordon[:, None], col * (1 + 0.2 * np.sin(2 * np.pi * (u * 3 + z) / 0.012))[:, None], col)
+    torsade = np.sin(2 * np.pi * (u * 3 + z) / 0.012)
+    col = np.where(cordon[:, None], col * (1 + 0.2 * torsade)[:, None], col)
+    haut += 0.5 * torsade * cordon
+    # tabi salis par le sol, bois des geta, lanieres en velours
+    tabi = est.get("Tabi", vide)
+    sol = lisse01(GETA + 0.06, GETA - 0.002, z) * (0.6 + 0.4 * lisse01(-0.5, 1.0, bruit(P, 60, 71)))
+    col = melange(col, (0.33, 0.27, 0.22), sol * 0.85 * tabi)
+    col = melange(col, (0.45, 0.42, 0.36), lisse01(0.6, 1.4, bruit(P, 25, 72)) * 0.5 * tabi)
+    bois = est.get("Bois", vide)
+    veine_bois = np.sin(2 * np.pi * (y * 90 + 1.5 * bruit(P, 20, 73)))
+    col = np.where(bois[:, None], col * (0.85 + 0.15 * veine_bois)[:, None], col)
+    haut += 0.35 * veine_bois * bois + 0.15 * bruit(P, 400, 74) * est.get("Hanao", vide)
     # gouttes de sang sur le col et la poitrine
     devant = Nn[:, 1] < -0.3
     for _ in range(45):
@@ -1106,6 +1463,7 @@ def peindre_tissu(o, I, e):
             col = melange(col, (0.28, 0.01, 0.03), a * 0.9)
     col *= (0.4 + 0.6 * ao)[:, None]
     poser_texture(o, "kuchisake_kimono", col, 0.55)
+    carte_normale(o, haut, 0.0012, "kuchisake_kimono_normal")
 
 
 def cacher_peau(corps_, caches):
@@ -1119,8 +1477,58 @@ def cacher_peau(corps_, caches):
     corps_.data.update()
 
 
+def texture_cheveux():
+    """Texture de meches : 4 bandes cote a cote, ~75 cheveux fins chacune (transparence entre les cheveux)."""
+    W, H, ncol = 1024, 2048, 4
+    alpha = np.zeros((H, W), np.float32)
+    teinte = np.full((H, W), 0.02, np.float32)
+    rng = np.random.default_rng(17)
+    cw = W // ncol
+    lignes = np.arange(H)
+    for c in range(ncol):
+        for _ in range(75):
+            x0 = c * cw + rng.uniform(5, cw - 5)
+            larg = rng.uniform(1.0, 3.2)
+            fin = int(rng.uniform(0.0, 0.35) * H)           # la pointe (en bas de l'image)
+            amp, fr, ph = rng.uniform(0, 4), rng.uniform(1, 4), rng.uniform(0, 6.28)
+            lum = rng.uniform(0.025, 0.11)
+            ys = lignes[fin:]
+            xc = x0 + amp * np.sin(ys / H * fr * 2 * np.pi + ph)
+            eff = larg * np.clip((ys - fin) / (0.12 * H), 0.15, 1) ** 0.6
+            for dx in range(-4, 5):
+                xi = np.clip(np.round(xc).astype(int) + dx, c * cw, (c + 1) * cw - 1)
+                a = np.clip(1 - np.abs(xi - xc) / eff, 0, 1)
+                cur = alpha[ys, xi]
+                plus = a > cur
+                teinte[ys[plus], xi[plus]] = lum
+                alpha[ys, xi] = np.maximum(cur, a)
+    rgba = np.stack([teinte, teinte, teinte * 1.08, alpha], -1)
+    img = bpy.data.images.new("kuchisake_cheveux", W, H, alpha=True)
+    img.pixels.foreach_set(rgba.astype(np.float32).ravel())
+    os.makedirs(SORTIE, exist_ok=True)
+    img.filepath_raw = os.path.join(SORTIE, "kuchisake_cheveux.png")
+    img.file_format = 'PNG'
+    img.save()
+    img.pack()
+    return img
+
+
+def matiere_cheveux(nom, img, transparent):
+    m = bpy.data.materials.new(nom)
+    m.use_nodes = True
+    b = m.node_tree.nodes["Principled BSDF"]
+    b.inputs["Roughness"].default_value = 0.4
+    t = m.node_tree.nodes.new("ShaderNodeTexImage")
+    t.image = img
+    m.node_tree.links.new(t.outputs["Color"], b.inputs["Base Color"])
+    if transparent:
+        m.node_tree.links.new(t.outputs["Alpha"], b.inputs["Alpha"])
+    return m
+
+
 def cheveux(corps_, V, vetements, z_dos):
-    """~330 longues meches raides, raie au milieu, quelques-unes tombent devant le visage."""
+    """~450 meches (cartes avec une texture de cheveux fins), raie au milieu, quelques meches devant
+    le visage et des cheveux rebelles qui partent dans tous les sens."""
     e = V.e
     tete = bvh(corps_)
     obst = [tete] + [bvh(o) for o in vetements if o.name.startswith("Noeud")]
@@ -1142,22 +1550,27 @@ def cheveux(corps_, V, vetements, z_dos):
                 p = loc + n * off
         return p
 
+    def adoucir(pts, fois=2):
+        for _ in range(fois):
+            pts = [pts[0]] + [(pts[i - 1] + pts[i] * 2 + pts[i + 1]) / 4 for i in range(1, len(pts) - 1)] + [pts[-1]]
+        return pts
+
     meches = []
     for s in (1, -1):
-        for k in range(200):
+        for k in range(225):
             u = rng.random() ** 0.8
             beta = math.radians(-58 + 122 * u)                 # du front (-) vers la nuque (+)
             racine = Vector((s * 0.02, math.sin(beta), math.cos(beta)))
-            face = k < 5
+            face = k < 6
             if face:                                           # meches devant le visage
                 racine = Vector((s * 0.05, math.sin(math.radians(-45)), math.cos(math.radians(-45))))
-                phi_fin = s * math.radians(rng.uniform(150, 165))
+                phi_fin = s * math.radians(rng.uniform(148, 165))
                 off = e * rng.uniform(0.18, 0.26)
-                larg = e * rng.uniform(0.1, 0.16)
+                larg = e * rng.uniform(0.12, 0.2)
             else:
                 phi_fin = s * math.radians(118 - 108 * u + rng.uniform(-8, 8))
-                off = e * (0.03 + 0.17 * rng.random() ** 1.6)
-                larg = e * rng.uniform(0.16, 0.3)
+                off = e * (0.03 + 0.2 * rng.random() ** 1.6)
+                larg = e * rng.uniform(0.3, 0.5)
             fin = dir_(math.radians(98 + rng.uniform(-4, 6)), phi_fin)
             pts = []
             for i in range(11):
@@ -1180,12 +1593,22 @@ def cheveux(corps_, V, vetements, z_dos):
                     q = p + Vector((0, 0, -chute * f)) + dehors * ((0.25 if devant else 0.5) * e * math.sqrt(f)) \
                         + Vector((rng.uniform(-1, 1), rng.uniform(-1, 1), 0)) * 0.02 * e
                     pts.append(q if face else ecarter(q, off + 0.22 * e))
-            for _ in range(2):                                 # adoucir le trajet
-                pts = [pts[0]] + [(pts[i - 1] + pts[i] * 2 + pts[i + 1]) / 4 for i in range(1, len(pts) - 1)] + [pts[-1]]
-            meches.append((pts, larg, 1 if rng.random() < 0.3 else 0))
+            meches.append((adoucir(pts), larg, rng.randrange(4)))
+    # cheveux rebelles : fins, ils sortent de la masse et retombent
+    for k in range(32):
+        d = dir_(math.radians(rng.uniform(30, 100)), rng.uniform(-math.pi, math.pi))
+        p = sur_crane(d, 0.05 * e)
+        if p is None:
+            continue
+        sens = (p - C).normalized()
+        pts = [p]
+        for i in range(7):
+            sens = (sens * 0.6 + Vector((rng.uniform(-0.4, 0.4), rng.uniform(-0.4, 0.4), -0.6 - 0.15 * i))).normalized()
+            pts.append(pts[-1] + sens * 0.3 * e)
+        meches.append((adoucir(pts), e * rng.uniform(0.04, 0.07), rng.randrange(4)))
     bm = bmesh.new()
-    mi = []
-    for pts, larg, mat in meches:
+    uv = bm.loops.layers.uv.new("UV")
+    for pts, larg, colonne in meches:
         N = len(pts)
         ligne = []
         for i, p in enumerate(pts):
@@ -1193,32 +1616,38 @@ def cheveux(corps_, V, vetements, z_dos):
             dehors = Vector((p.x - C.x, p.y - C.y, (p.z - C.z) if p.z > V.M.z else 0)).normalized()
             w = tg.cross(dehors)
             w = w.normalized() if w.length > 1e-6 else Vector((1, 0, 0))
-            h = larg / 2 * (1 - 0.85 * (i / (N - 1)) ** 2.5)
-            ligne.append((bm.verts.new(p - w * h), bm.verts.new(p + w * h)))
+            h = larg / 2 * (1 - 0.5 * (i / (N - 1)) ** 2)
+            v = 1 - 0.99 * i / (N - 1)
+            ligne.append(((bm.verts.new(p - w * h), (colonne / 4 + 0.004, v)),
+                          (bm.verts.new(p + w * h), ((colonne + 1) / 4 - 0.004, v))))
         for i in range(N - 1):
-            bm.faces.new((ligne[i][0], ligne[i][1], ligne[i + 1][1], ligne[i + 1][0]))
-            mi.append(mat)
-    for f, m in zip(bm.faces, mi):
-        f.material_index = m
+            coins = (ligne[i][0], ligne[i][1], ligne[i + 1][1], ligne[i + 1][0])
+            f = bm.faces.new([c[0] for c in coins])
+            for boucle, c in zip(f.loops, coins):
+                boucle[uv].uv = c[1]
+    # visibles des deux cotes : une copie retournee
+    dup = bmesh.ops.duplicate(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:])
+    bmesh.ops.reverse_faces(bm, faces=[g for g in dup["geom"] if isinstance(g, bmesh.types.BMFace)])
     me = bpy.data.meshes.new("Cheveux")
     bm.to_mesh(me)
     bm.free()
     o = lier(bpy.data.objects.new("Cheveux", me))
-    me.materials.append(matiere("Cheveux", 0.5))
-    me.materials.append(matiere("Cheveux2", 0.45))
-    # meches visibles des deux cotes : une copie retournee (moins lourd qu'une epaisseur)
-    bm = bmesh.new()
-    bm.from_mesh(me)
-    dup = bmesh.ops.duplicate(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:])
-    bmesh.ops.reverse_faces(bm, faces=[g for g in dup["geom"] if isinstance(g, bmesh.types.BMFace)])
-    bm.to_mesh(me)
-    bm.free()
+    img = texture_cheveux()
+    me.materials.append(matiere_cheveux("Cheveux", img, True))
     activer(o)
     bpy.ops.object.shade_smooth()
-    # calotte sombre sous les meches (pour ne jamais voir le crane)
+    # calotte sous les meches (pour ne jamais voir le crane), avec la meme texture, sans transparence
     cal = coquille(corps_, lambda p: (p.center - C).length < 3.5 * e and (
-        p.center.z > V.yeux[0].z + 0.75 * e or (p.center.y > C.y - 0.2 * e and p.center.z > V.M.z - 0.3 * e)),
-        0.025 * e, "Calotte", "Cheveux", lissage=6)
+        p.center.z > V.yeux[0].z + 0.95 * e or (p.center.y > C.y - 0.2 * e and p.center.z > V.M.z - 0.3 * e)),
+        0.025 * e, "Calotte", "Calotte", lissage=6)
+    cal.data.materials.clear()
+    cal.data.materials.append(matiere_cheveux("Calotte", img, False))
+    couche = cal.data.uv_layers.new(name="UV")
+    for boucle in cal.data.loops:
+        q = cal.data.vertices[boucle.vertex_index].co - C
+        phi = math.atan2(q.x, q.y)
+        theta = math.acos(max(-1.0, min(1.0, q.z / max(q.length, 1e-9))))
+        couche.data[boucle.index].uv = ((phi / (2 * math.pi) + 0.5) * 3, 1 - theta / (0.75 * math.pi))
     # poids : la tete, puis le haut du dos pour les longueurs
     for ob in (o, cal):
         gt, gh = ob.vertex_groups.new(name="Tete"), ob.vertex_groups.new(name="Haut")
@@ -1245,35 +1674,99 @@ def poids_depuis_corps(objs, corps_):
 
 
 def animations(arm):
-    """Deux animations : 'Attente' (tete penchee qui tremble) et 'Sourire' (la machoire s'ouvre en grand)."""
-    X, Y = (1, 0, 0), (0, 1, 0)
+    """Animations (sur place, en boucle sauf Regard / Attaque / Jolie) :
+    Attente  : tete penchee qui tremble, avec un sursaut
+    Marche   : marche lente et saccadee, la tete qui tressaute
+    Course   : course penchee en avant, bras qui trainent derriere
+    Regard   : la tete se tourne d'un coup (vers la gauche du perso)
+    Attaque  : le jumpscare (elle se jette en avant, bras tendus, bouche grande ouverte)
+    Jolie    : "Est-ce que je suis jolie ?" : elle enleve son masque et ouvre la bouche
+    Sourire  : la machoire s'ouvre en grand"""
+    X, Y, Z = (1, 0, 0), (0, 1, 0), (0, 0, 1)
 
-    def base(tilt, nod, souffle, bras):
+    def base(tilt=18, nod=10, souffle=0, bras=0):
         return {"Tete": [(Y, tilt), (X, nod * 0.5)], "Cou": [(X, nod)], "Haut": [(X, 6 + souffle)],
                 "Poitrine": [(X, souffle)],
                 "Bras.L": [(Y, 22 + bras)], "Bras.R": [(Y, -22 - bras)],
                 "AvantBras.L": [(X, -8)], "AvantBras.R": [(X, -8)],
                 "Clavicule.L": [(Y, 5)], "Clavicule.R": [(Y, -5)]}
 
+    def avec(r, ajouts):
+        r = {k: list(v) for k, v in r.items()}
+        for k, v in ajouts.items():
+            r[k] = r.get(k, []) + list(v)
+        return r
+
     def action(nom, cles):
         arm.animation_data_create()
         act = bpy.data.actions.new(nom)
         act.use_fake_user = True
         arm.animation_data.action = act
-        for frame, rot in cles:
-            poser(arm, rot)
+        for cle in cles:
+            frame, rot = cle[0], cle[1]
+            poser(arm, rot, cle[2] if len(cle) > 2 else None, cle[3] if len(cle) > 3 else None)
             for pb in arm.pose.bones:
                 pb.keyframe_insert("rotation_quaternion", frame=frame)
+                pb.keyframe_insert("location", frame=frame)
         piste = arm.animation_data.nla_tracks.new()
         piste.name = nom
         piste.strips.new(nom, 1, act)
         piste.mute = True
         arm.animation_data.action = None
 
+    def pas(phi, amp_h, amp_g, penche, balance, bob, r):
+        pos = {"Racine": (0.02 * math.sin(2 * math.pi * phi), 0, bob * math.cos(4 * math.pi * phi))}
+        r = avec(r, {"Haut": [(X, penche)], "Bassin": [(Z, 4 * math.sin(2 * math.pi * phi))]})
+        for c, dec in (("L", 0.0), ("R", 0.5)):
+            q = (phi + dec) % 1
+            hanche = -amp_h * math.cos(2 * math.pi * q)
+            genou = amp_g * math.sin(math.pi * (q - 0.5) / 0.5) if q > 0.5 else 4
+            r = avec(r, {f"Cuisse.{c}": [(X, hanche)], f"Tibia.{c}": [(X, genou)],
+                         f"Pied.{c}": [(X, -(hanche + genou) * 0.8)], f"Bras.{c}": [(X, -balance * hanche)]})
+        return r, pos
+
     action("Attente", [(1, base(18, 10, 0, 0)), (20, base(21, 11, 2, 1)), (40, base(17, 9, 0, 0)),
                        (52, base(19, 10, 1, 0)), (54, base(34, 16, 1, 0)), (57, base(16, 9, 1, 0)),
                        (70, base(20, 11, 2, 1)), (90, base(18, 10, 0, 0))])
-    ouvre = lambda a, tilt: dict(base(tilt, 4, 1, 0), Machoire=[(X, a)])
+    cles = []
+    for f in range(1, 42, 2):
+        sursaut = 13 if (f // 8) % 3 == 1 else 0
+        r, pos = pas((f - 1) / 40, 10, 12, 6, 0.35, 0.008, base(20 + sursaut, 12))
+        cles.append((f, r, pos))
+    action("Marche", cles)
+    cles = []
+    for f in range(1, 22, 2):
+        r, pos = pas((f - 1) / 20, 18, 24, 24, 0.1, 0.025,
+                     avec(base(25, 18), {"Ventre": [(X, 8)], "Bras.L": [(X, 40)], "Bras.R": [(X, 40)],
+                                         "Machoire": [(X, 14)], "Masque": [(X, 8)]}))
+        cles.append((f, r, pos))
+    action("Course", cles)
+    tourne = lambda a, tilt: avec(base(tilt, 10), {"Tete": [(Z, a * 0.6)], "Cou": [(Z, a * 0.4)]})
+    action("Regard", [(1, base(18, 10)), (10, base(18, 10)), (13, tourne(95, 28)), (15, tourne(102, 30)),
+                      (18, tourne(95, 27)), (30, tourne(96, 26)), (40, tourne(95, 29))])
+    en_avant = lambda tilt, ouvre: avec(base(tilt, -15), {
+        "Haut": [(X, 28)], "Ventre": [(X, 10)],
+        "Bras.L": [(Y, 18), (X, -85)], "Bras.R": [(Y, -18), (X, -85)],
+        "AvantBras.L": [(X, -10)], "AvantBras.R": [(X, -10)], "Main.L": [(X, 25)], "Main.R": [(X, 25)],
+        "Machoire": [(X, ouvre)], "Masque": [(X, ouvre * 0.6)]})
+    action("Attaque", [(1, base(18, 10)), (6, avec(base(14, 4), {"Haut": [(X, -8)]}), {"Racine": (0, 0.08, 0)}),
+                       (11, en_avant(12, 38), {"Racine": (0, -0.55, -0.06)}),
+                       (14, en_avant(17, 40), {"Racine": (0, -0.58, -0.06)}),
+                       (17, en_avant(10, 38), {"Racine": (0, -0.57, -0.06)}),
+                       (32, en_avant(13, 39), {"Racine": (0, -0.57, -0.06)})])
+    h = arm.data.bones["Masque"].head_local
+    prise = h + Vector((-0.075, -0.07, -0.03))           # bord droit du masque
+    main = {"R": (lambda: point_os(arm, "Masque", prise) + Vector((-0.05, -0.07, -0.13)), (-1, 0.2, -1.2))}
+    tenu = {"Masque": [(X, 80), (Z, -20)]}
+    bas_m = {"Masque": (-0.1, -0.2, -0.38)}
+    action("Jolie", [(1, base(18, 10)), (15, base(26, 6)),
+                     (32, base(26, 6), {}, main),
+                     (45, base(24, 6), {"Masque": (-0.05, -0.12, -0.2)}, main),
+                     (58, avec(base(28, 6), tenu), bas_m, main),
+                     (70, avec(base(30, 6), dict(tenu, Machoire=[(X, 12)])), bas_m, main),
+                     (85, avec(base(34, -6), dict(tenu, Machoire=[(X, 36)])), bas_m, main),
+                     (100, avec(base(32, -6), dict(tenu, Machoire=[(X, 37)])), bas_m, main)])
+    ouvre = lambda a, tilt: avec(base(tilt, 4, 1, 0), {"Machoire": [(X, a)], "Masque": [(X, a * 0.6)]})
     action("Sourire", [(1, ouvre(0, 18)), (15, ouvre(6, 14)), (30, ouvre(32, 8)), (45, ouvre(34, 8)),
                        (60, ouvre(0, 18))])
     poser(arm, {})
@@ -1286,7 +1779,7 @@ def exporter(nom, arm, objs):
     bpy.ops.export_scene.fbx(filepath=fbx, use_selection=True, object_types={'ARMATURE', 'MESH'},
                              add_leaf_bones=False, bake_anim=True, bake_anim_use_all_actions=True,
                              bake_anim_use_nla_strips=False, bake_anim_force_startend_keying=True,
-                             path_mode='COPY', embed_textures=True, mesh_smooth_type='FACE')
+                             path_mode='COPY', embed_textures=True, mesh_smooth_type='FACE', use_tspace=True)
     glb = os.path.join(SORTIE, nom + ".glb")
     bpy.ops.export_scene.gltf(filepath=glb, use_selection=True, export_format='GLB', export_animations=True)
     tri = sum(sum(len(p.vertices) - 2 for p in o.data.polygons) for o in objs)
@@ -1300,21 +1793,22 @@ def construire(variante):
     arm = squelette(J)
     activer(corps_, arm)
     bpy.ops.object.parent_set(type='ARMATURE_AUTO')
-    pose_A(corps_, arm)
+    for g in ("Masque", "Racine"):            # ces os ne bougent pas la peau
+        if g in corps_.vertex_groups:
+            corps_.vertex_groups.remove(corps_.vertex_groups[g])
+    pose_A(corps_, arm, J)
+    mains_longues(corps_, J)
     V = Visage(corps_, J)
     subdiviser_tete(corps_, V)
     sculpter(corps_, V)
     poids_machoire(corps_, V)
-    peindre_peau(corps_, V)
-    objs = [corps_] + yeux_noirs(V) + gorge(V)
+    peindre_peau(corps_, V, J)
+    objs = [corps_] + yeux_noirs(V) + gorge(V) + griffes(J)
     vet, caches, z_dos, infos = kimono(corps_, V, J, arm)
-    poids_depuis_corps([o for o in vet if o.name.startswith(("Kimono", "Col", "SousCol"))], corps_)
+    poids_depuis_corps([o for o in vet if o.name.startswith(("Kimono", "Col", "SousCol", "Tabi"))], corps_)
+    objs += dents(corps_, V)
     if variante == "masque":
-        m = masque(corps_, V)
-        poids_depuis_corps(m[:1], corps_)
-        objs += m
-    else:
-        objs += dents(corps_, V)
+        objs += masque(corps_, V)
     objs += cheveux(corps_, V, vet, z_dos)
     tissu = joindre(vet, "Kimono")
     tissu.data.uv_layers.new(name="UV")
