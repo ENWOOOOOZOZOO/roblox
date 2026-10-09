@@ -21,7 +21,7 @@ import numpy as np
 from mathutils import Vector, Quaternion, Matrix
 
 SEULEMENT = []          # vide = les 20
-MODE = "tous"           # "adultes", "bebes", "oeufs", "oeufs50", "machine", "outils", "nouveaux" ou "tous"
+MODE = "tous"           # "adultes", "bebes", "oeufs", "oeufs50", "machine", "outils", "nouveaux", "horreur" ou "tous"
 DOSSIER = os.path.join(os.path.expanduser("~"), "dinos")
 DOSSIER_BEBES = os.path.join(os.path.expanduser("~"), "bebes")
 DOSSIER_OEUFS = os.path.join(os.path.expanduser("~"), "oeufs")
@@ -2017,7 +2017,7 @@ def lisser_poids(obj, iterations=4):
 
 
 def finaliser_lisse(nom_fichier, couleurs, echelle, dossier=None, max_triangles=14000, squelette_os=None,
-                    facettes=False):
+                    facettes=False, finesse=100, douceur=None):
     """facettes=True : grandes facettes nettes (style low-poly massif) au lieu d'une peau toute ronde."""
     bas = min((o.matrix_world @ v.co).z for o in objets() for v in o.data.vertices)
     S = Matrix.Scale(echelle, 4)
@@ -2031,8 +2031,8 @@ def finaliser_lisse(nom_fichier, couleurs, echelle, dossier=None, max_triangles=
     # 1) la peau lisse : copies du corps fusionnees, refaites en voxels puis adoucies
     cible = _joindre(_copier(corps), nom_fichier)
     dims = cible.dimensions
-    for nom, reglages in (("REMESH", dict(mode='VOXEL', voxel_size=max(dims) / 100)),
-                          ("SMOOTH", dict(factor=1.0, iterations=10 if facettes else 18))):
+    for nom, reglages in (("REMESH", dict(mode='VOXEL', voxel_size=max(dims) / finesse)),
+                          ("SMOOTH", dict(factor=1.0, iterations=douceur or (10 if facettes else 18)))):
         mod = cible.modifiers.new(nom, nom)
         for k, v in reglages.items():
             setattr(mod, k, v)
@@ -3550,6 +3550,154 @@ def construire_oeuf_genere(oe):
                      dossier=os.path.join(os.path.expanduser("~"), "oeufs50"))
 
 
+# =====================================================================
+#  HORREUR : KUCHISAKE-ONNA (la femme au masque)
+#  Deux versions avec le meme squelette : avec masque / sans masque (grand sourire).
+# =====================================================================
+COULEURS_KUCHISAKE = theme(Peau=(226, 222, 218), Ventre=(226, 222, 218), Accent=(190, 166, 118), Rayure=(42, 36, 34),
+                           Deco1=(46, 42, 48), Deco2=(120, 20, 26), Noir=(14, 12, 14), Os=(242, 242, 238),
+                           Bouche=(26, 6, 8), Oeil=(10, 8, 8), Lueur=(200, 16, 20), Corne=(196, 200, 208),
+                           Griffe=(110, 20, 26), Dent=(236, 230, 210))
+DETAILS_HORREUR = ("Doigt", "Ciseaux", "Meche", "Masque", "Elastique", "Sourire", "Talon", "Bouton", "Boucle")
+
+
+def tronc_cone(nom, z0, z1, r0, r1, mat, sy=0.75, sommets=10):
+    """Tronc de cone (jupe du manteau) : large en bas, plus etroit en haut."""
+    bpy.ops.mesh.primitive_cone_add(vertices=sommets, radius1=r0, radius2=r1, depth=z1 - z0,
+                                    location=(0, 0, (z0 + z1) / 2))
+    o = bpy.context.active_object
+    o.name = nom
+    o.scale = (1, sy, 1)
+    o.data.materials.append(matiere(mat))
+    return o
+
+
+def kuchisake(masque=True):
+    """Tres grande, tres maigre, voutee, tete penchee : plus elle est 'presque humaine', plus elle fait peur."""
+    V = Vector
+    H_EPAULE = 7.3
+    # jambes tres fines, talons
+    for s in (-1, 1):
+        x = s * 0.26
+        boite("Jambe", (x, 0, 1.75), (0.2, 0.22, 3.1), "Deco1", biseau=0.03)
+        boite("Chaussure", (x, -0.14, 0.13), (0.24, 0.6, 0.24), "Rayure", biseau=0.03)
+        boite("Talon", (x, 0.12, 0.05), (0.1, 0.1, 0.1), "Rayure", biseau=0)
+    # long manteau : jupe evasee a facettes + buste voute
+    tronc_cone("Jupe", 3.0, 5.6, 0.85, 0.55, "Accent", sy=0.7, sommets=8)
+    boite("Corps", (0, -0.12, 6.45), (1.0, 0.58, 1.9), "Accent", avant=(0.9, 1.0), tangage=10)
+    boite("Ceinture", (0, -0.02, 5.6), (1.08, 0.66, 0.2), "Rayure", biseau=0.03)
+    boite("Boucle", (0, -0.36, 5.6), (0.22, 0.06, 0.18), "Corne", biseau=0.02)
+    for z in (6.1, 6.6, 4.9, 4.2):
+        boite("Bouton", (0.14, -0.42 if z > 5.6 else -0.5 + (z - 3.0) * 0.06, z), (0.08, 0.05, 0.08), "Rayure", biseau=0)
+    for s in (-1, 1):
+        boite("Col", (s * 0.24, -0.38, H_EPAULE + 0.05), (0.38, 0.16, 0.6), "Accent", biseau=0.03, roulis=s * 20)
+    # bras trop longs : les mains pendent sous les genoux
+    for s in (-1, 1):
+        x = s * 0.8
+        boite("Epaule", (x * 0.85, -0.2, H_EPAULE - 0.05), (0.5, 0.5, 0.34), "Accent", biseau=0.04)
+        boite("Manche", (x, -0.2, H_EPAULE - 1.05), (0.26, 0.3, 1.95), "Accent", biseau=0.03, roulis=s * 3)
+        boite("Manche", (x * 1.05, -0.26, H_EPAULE - 2.9), (0.22, 0.26, 1.85), "Accent", biseau=0.03)
+        ym, zm = -0.27, H_EPAULE - 4.1
+        boite("Main", (x * 1.06, ym, zm), (0.18, 0.11, 0.5), "Peau", biseau=0.02)
+        for k, dx in enumerate((-0.065, -0.02, 0.025, 0.07)):
+            L = 0.8 if k in (1, 2) else 0.62
+            boite("Doigt", (x * 1.06 + dx, ym, zm - 0.25 - L / 2), (0.035, 0.045, L), "Peau", biseau=0.008)
+            cone("Griffe", (x * 1.06 + dx, ym, zm - 0.25 - L), 0.025, 0.18, "Griffe", (0, -0.2, -1), sommets=4)
+    # immenses ciseaux dans la main droite
+    xr = -0.8 * 1.06
+    zc = H_EPAULE - 4.0
+    for dx, ang in ((-0.035, 5), (0.035, -5)):
+        cone("Ciseaux", (xr + dx, -0.42, zc), 0.07, 2.8, "Corne", (math.sin(math.radians(ang)), -0.05, -1),
+             sommets=4, echelle=(1.6, 0.3, 1))
+        ellipse("Ciseaux", (xr + dx * 4, -0.42, zc + 0.3), (0.13, 0.04, 0.1), "Deco2", seg=8, anneaux=4)
+    boite("Ciseaux", (xr, -0.42, zc - 0.02), (0.08, 0.06, 0.08), "Rayure", biseau=0)
+
+    # cou trop long, tete penchee sur le cote
+    avant = set(objets())
+    boite("Cou", (0, -0.3, H_EPAULE + 0.5), (0.17, 0.17, 1.1), "Peau", biseau=0.02, tangage=12)
+    tc = V((0, -0.42, H_EPAULE + 1.35))
+    tete = ellipse("Tete", tc, (0.33, 0.38, 0.5), "Peau", seg=14, anneaux=10)
+    # cheveux tres longs, raides, qui tombent devant et derriere
+    ellipse("Cheveux", tc + V((0, 0.16, 0.26)), (0.36, 0.36, 0.32), "Noir", seg=12, anneaux=8)
+    boite("Cheveux", tc + V((0, 0.28, -1.5)), (0.8, 0.26, 3.2), "Noir", biseau=0.03, arriere=(1.1, 1))
+    boite("Frange", tc + V((0, -0.33, 0.32)), (0.66, 0.12, 0.3), "Noir", biseau=0.03)
+    for s in (-1, 1):
+        for k, (dx, dy, L) in enumerate(((0.3, -0.12, 2.6), (0.24, -0.26, 1.7), (0.36, 0.05, 3.0))):
+            boite("Meche", tc + V((s * dx, dy, -L / 2 + 0.2)), (0.09, 0.08, L), "Noir", biseau=0.01)
+    # yeux : grands, noirs, minuscules pupilles rouges
+    for s in (-1, 1):
+        loc, n = toucher(tete, tc + V((s * 0.13, -5, 0.07)), (0, 1, 0))
+        if loc:
+            q = n.to_track_quat('Z', 'Y') @ Quaternion((0, 0, 1), math.radians(-12 * s))
+            ellipse("Oeil", loc, (0.12, 0.065, 0.03), "Oeil", rot=q, seg=10, anneaux=6)
+            ellipse("Pupille", loc + n * 0.022, (0.018, 0.018, 0.01), "Lueur", rot=q, seg=6, anneaux=4)
+            ellipse("Cerne", loc + n * -0.005 + V((0, 0, -0.07)), (0.12, 0.04, 0.02), "Bouche", rot=q, seg=8, anneaux=4)
+    if masque:
+        loc, n = toucher(tete, tc + V((0, -5, -0.22)), (0, 1, 0))
+        ellipse("Masque", loc + V((0, 0.03, 0)), (0.3, 0.1, 0.22), "Os", seg=12, anneaux=8)
+        for s in (-1, 1):
+            boite("Elastique", tc + V((s * 0.3, 0.02, -0.14)), (0.03, 0.36, 0.03), "Os", biseau=0, lacet=s * 32)
+    else:
+        # sourire noir d'une oreille a l'autre, plein de dents pointues (pas de sang)
+        for k in range(17):
+            t = -1 + 2 * k / 16
+            loc, n = toucher(tete, tc + V((t * 0.31, -5, -0.24 + 0.16 * t * t)), (0, 1, 0))
+            if loc is None:
+                continue
+            q = n.to_track_quat('Z', 'Y')
+            ouvert = 0.075 * (1 - 0.6 * abs(t))
+            ellipse("Sourire", loc, (0.04, ouvert + 0.02, 0.03), "Bouche", rot=q, seg=6, anneaux=4)
+            if abs(t) < 0.9 and k % 1 == 0:
+                cone("Dent", loc + n * 0.012 + V((0, 0, ouvert)), 0.016, ouvert * 0.9, "Dent", -V((0, 0, 1)) + n * 0.2,
+                     sommets=4)
+                cone("Dent", loc + n * 0.012 - V((0, 0, ouvert)), 0.016, ouvert * 0.9, "Dent", V((0, 0, 1)) + n * 0.2,
+                     sommets=4)
+    # tete penchee de 18 degres sur le cote
+    tourner(avant, 11, 'Y', V((0, -0.3, H_EPAULE)))
+
+    # squelette humanoide
+    os_ = [("Racine", V((0, 0, 0)), V((0, 0, 0.5)), None),
+           ("Bassin", V((0, 0, 5.5)), V((0, -0.05, 6.1)), "Racine"),
+           ("Torse", V((0, -0.05, 6.1)), V((0, -0.25, H_EPAULE)), "Bassin"),
+           ("Cou", V((0, -0.25, H_EPAULE)), V((0.12, -0.38, H_EPAULE + 0.9)), "Torse"),
+           ("Tete", V((0.12, -0.38, H_EPAULE + 0.9)), V((0.4, -0.45, H_EPAULE + 1.9)), "Cou")]
+    for s, c in ((-1, "R"), (1, "L")):
+        x = s * 0.8
+        os_ += [(f"Bras.{c}", V((x, -0.2, H_EPAULE)), V((x, -0.2, H_EPAULE - 2.0)), "Torse"),
+                (f"AvantBras.{c}", V((x, -0.2, H_EPAULE - 2.0)), V((x * 1.06, -0.27, H_EPAULE - 3.85)), f"Bras.{c}"),
+                (f"Main.{c}", V((x * 1.06, -0.27, H_EPAULE - 3.85)), V((x * 1.06, -0.27, H_EPAULE - 5.2)),
+                 f"AvantBras.{c}"),
+                (f"Cuisse.{c}", V((s * 0.26, 0, 5.5)), V((s * 0.26, 0, 3.0)), "Bassin"),
+                (f"Tibia.{c}", V((s * 0.26, 0, 3.0)), V((s * 0.26, 0, 0.3)), f"Cuisse.{c}"),
+                (f"Pied.{c}", V((s * 0.26, 0, 0.3)), V((s * 0.26, -0.45, 0.08)), f"Tibia.{c}")]
+    regles = {"Cheveux": "Tete", "Frange": "Tete", "Meche": "Tete", "Masque": "Tete", "Elastique": "Tete",
+              "Oeil": "Tete", "Pupille": "Tete", "Cerne": "Tete", "Sourire": "Tete", "Dent": "Tete",
+              "Ciseaux": "Main.R", "Jupe": "Bassin", "Ceinture": "Bassin", "Boucle": "Bassin", "Col": "Torse",
+              "Epaule": "Torse", "Corps": "Torse", "Cou": "Cou"}
+    for o in objets():
+        nom = o.name.split(".")[0]
+        centre = sum((o.matrix_world @ Vector(c) for c in o.bound_box), Vector()) / 8
+        cible = regles.get(nom) or min(os_[1:], key=lambda x: _dist_segment(centre, x[1], x[2]))[0]
+        vg = o.vertex_groups.new(name=cible)
+        vg.add(list(range(len(o.data.vertices))), 1.0, 'REPLACE')
+    return os_
+
+
+def construire_kuchisake():
+    """Finition nette (facettes), sans studs : les studs rendent un monstre trop 'mignon'."""
+    global AVEC_STUDS, DETAILS
+    ancien, anciens_details = AVEC_STUDS, DETAILS
+    AVEC_STUDS = set()
+    DETAILS = DETAILS + DETAILS_HORREUR + ("Cerne", "Frange", "Col")
+    dossier = os.path.join(os.path.expanduser("~"), "horreur")
+    for masque, nom in ((True, "kuchisake_onna_masque"), (False, "kuchisake_onna_sourire")):
+        nettoyer()
+        os_ = kuchisake(masque)
+        finaliser_lisse(nom, COULEURS_KUCHISAKE, 1.0, dossier=dossier, squelette_os=os_, finesse=190, douceur=6,
+                        max_triangles=16000)
+    AVEC_STUDS, DETAILS = ancien, anciens_details
+
+
 def construire(numero, bebe=False):
     global BEBE, PUPILLE
     BEBE = bebe
@@ -3570,7 +3718,9 @@ def construire(numero, bebe=False):
 
 if __name__ == "__main__":
     versions = {"adultes": [False], "bebes": [True], "oeufs": [], "machine": [], "outils": [], "oeufs50": [],
-                "nouveaux": []}.get(MODE, [False, True])
+                "nouveaux": [], "horreur": []}.get(MODE, [False, True])
+    if MODE in ("horreur", "tous"):
+        construire_kuchisake()
     if MODE in ("oeufs50", "tous"):
         for oe in repartir_oeufs():
             print(f"--- {oe['nom']} ({oe['rarete']}) ---")
