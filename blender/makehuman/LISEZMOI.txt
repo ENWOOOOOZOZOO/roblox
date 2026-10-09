@@ -1,0 +1,7 @@
+Corps humain de base utilise par kuchisake_reel.py.
+Source : MakeHuman (http://www.makehumancommunity.org), depot makehumancommunity/makehuman.
+Ces fichiers ont ete publies sous licence CC0 (domaine public) en septembre 2020
+(voir l'en-tete de base.obj).
+  base.obj            -> makehuman/data/3dobjs/base.obj
+  femme_mince.target  -> targets/macrodetails/universal-female-young-minmuscle-minweight.target
+  grande.target       -> targets/macrodetails/height/female-young-minmuscle-minweight-maxheight.target
