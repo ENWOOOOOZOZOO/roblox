@@ -26,5 +26,5 @@ Les .fbx sont dans `modeles/` (ou relance `batiments.py` dans Blender).
    `creative_prop_asset` utilisable par Verse.
 3. Dans `power_city` > Batiments, cree une entree "Eolienne" :
    Modele = Eolienne_Mat, AUnRotor = true, ModeleRotor = Eolienne_Rotor,
-   DecalageRotor = (75, 0, 1370), DureeTour = 4 secondes.
+   DecalageRotor = (75, 0, 1395), DureeTour = 4 secondes.
    Le rotor apparait avec le mat et tourne tout seul.
