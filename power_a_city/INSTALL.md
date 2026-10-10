@@ -69,5 +69,45 @@ mesh qui tourne, puis :
 | Sphere_Trou_Noir        | Sphere_Trou_Noir_Cage          | (0, 0, 460)    | true          | 10        |
 
 Si une piece apparait decalee sur le cote, inverse le signe de X dans DecalageRotor.
-Les lumieres (rose, cyan, blanc...) sont des materiaux "emission" : si elles ne brillent pas dans
-UEFN, ouvre le materiau et branche la couleur sur Emissive Color.
+Pour les pieces qui tournent : ouvre le mesh > Collision > Remove Collision (rien ne doit bloquer
+le joueur pendant que ca tourne).
+
+### Collisions
+
+Chaque .fbx contient des boites de collision simples (les objets `UCX_...`) qui suivent la forme
+du batiment vue de dessus. UEFN les reconnait tout seul a l'import : ne change PAS Collision
+Complexity (laisse "Project Default"). Les joueurs ne restent plus coinces dans les tuyaux.
+
+### Lumieres
+
+Les pieces lumineuses (neons roses, cyan, anneaux blancs, feu orange, soleil de la sphere Dyson)
+ont une texture branchee sur Emissive Color : elles brillent des l'import. Pour les faire briller
+plus fort, ouvre le materiau et multiplie l'emissive (Multiply par 5 a 20).
+
+### Eau animee
+
+L'eau (Eau_Cyan, Eau_Bleue, Eau_Cyber) a une texture de vagues. Pour la faire bouger : ouvre le
+materiau, ajoute un noeud Panner (Speed X = 0.05, Speed Y = 0.02) branche sur le UV de la texture.
+
+### Fumee (optionnel)
+
+1. Content Browser > clic droit > FX > Niagara System > "New system from template" > Fountain.
+   Nomme-le exactement `VFX_Fumee`, a la racine de Content. Reglages conseilles : couleur grise,
+   vitesse vers le haut (Z = 150), gravite 0, taille qui grandit avec le temps, duree de vie 3 s.
+2. Ajoute `fumee.verse` au projet, Build Verse Code, place le device `fumee_device` dans la map et
+   choisis ton device `power_city` dans son champ PowerCity.
+3. Pour chaque batiment a cheminee, recopie ses points dans PointsFumee (fichier
+   `modeles/points_fumee.txt`, deja en cm et dans le repere UEFN).
+
+### Materiau maitre (optionnel, pour aller plus loin)
+
+Les .fbx marchent tels quels (une texture de couleur par materiau). Si tu preferes un seul
+materiau maitre plus leger : le dossier `modeles/materiau_maitre/` contient les masques en niveaux
+de gris (studs, losanges, chevrons, dalles, damier, vagues) et `materiaux.csv` (pour chaque
+materiau : sa couleur, son masque, son intensite, son emission).
+1. Importe les masques. Cree un materiau `M_PowerCity` : Texture Sample (parametre "Masque")
+   x Vector Parameter "Couleur" x Scalar Parameter "Intensite" -> Base Color ;
+   Vector Parameter "Couleur" x Scalar Parameter "Emission" -> Emissive Color.
+2. Pour chaque ligne de `materiaux.csv`, cree une Material Instance de M_PowerCity avec la couleur,
+   le masque, l'intensite et l'emission du tableau, et remplace le materiau du meme nom sur les meshes.
+3. Changer une couleur = changer un parametre de l'instance, sans repasser par Blender.

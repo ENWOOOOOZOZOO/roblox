@@ -1,0 +1,13 @@
+# Haut des cheminees, en cm, dans le repere UEFN (X, Y, Z) par rapport au pivot du batiment.
+# A copier dans PointsFumee de l'entree du batiment (power_city > Batiments).
+Usine_Electrique             (-300, 320, 1075), (-300, 145, 1075)
+Centrale_Vapeur              (160, -85, 615)
+Plante_Bio                   (0, -155, 610)
+Usine_Grise                  (-165, -72, 500), (-55, -72, 500), (55, -72, 500)
+Station_Pompage              (10, -75, 260)
+Centrale_Rouge_Blanc         (-330, -200, 760), (-275, -245, 640)
+Centrale_Tuyaux              (-160, -435, 910), (140, -435, 910)
+Centrale_Gaz                 (-100, -60, 670), (50, -70, 670)
+Petite_Centrale_Nucleaire    (-240, -160, 825)
+Centrale_Nucleaire           (260, -180, 775)
+Grande_Centrale_Nucleaire    (-300, -260, 675), (-330, 230, 575)

@@ -43,6 +43,7 @@ import math
 import os
 import numpy as np
 from mathutils import Vector, Matrix
+from mathutils.bvhtree import BVHTree
 
 SORTIE = os.environ.get("POWERACITY_SORTIE", os.path.join(os.path.expanduser("~"), "poweracity_modeles"))
 APERCU = os.environ.get("POWERACITY_APERCU", "")   # chemin d'une image d'apercu (optionnel)
@@ -106,6 +107,11 @@ def motif(genre, n, px, aleatoire=False, remplis=0.0):
         f = (1 + 0.2 * np.exp(-(bord / 0.012) ** 2)) * (1 + 0.08 * np.exp(-(milieu / 0.008) ** 2))
         teinte = rng.choice([0.9, 1.0, 1.0, 1.08], size=(n, n))
         return np.tile(f, (n, n)) * np.kron(teinte, np.ones((px, px)))
+    if genre == "vagues":
+        # eau : deux lignes de vagues plus claires par motif
+        d = np.minimum(np.abs(v - (0.25 + 0.06 * np.sin(2 * np.pi * u))),
+                       np.abs(v - (0.75 + 0.06 * np.sin(2 * np.pi * u + np.pi))))
+        return np.tile(1 + 0.25 * np.exp(-(d / 0.03) ** 2), (n, n))
     if genre == "chevrons":
         d = np.abs(v - (0.72 - 0.6 * np.abs(u - 0.5))) * 0.86
         f = 1 - 0.35 * np.exp(-(d / 0.03) ** 2)
@@ -164,6 +170,8 @@ def matiere(nom, couleur, metal=0.0, rugo=0.6, emission=0.0, studs=None, motif_t
     b = nt.nodes["Principled BSDF"]
     b.inputs["Base Color"].default_value = (*couleur, 1.0)
     m["metres"] = n * tuile if motif_tex else 0.0      # taille de la texture dans le monde (pour les UV)
+    m["motif"], m["n"], m["remplis"], m["aleatoire"] = motif_tex, n, remplis, aleatoire
+    m["couleur"], m["couleur2"], m["emission"] = couleur, couleur2 or couleur, emission
     if motif_tex:
         tex = nt.nodes.new("ShaderNodeTexImage")
         if motif_tex == "damier":
@@ -179,6 +187,17 @@ def matiere(nom, couleur, metal=0.0, rugo=0.6, emission=0.0, studs=None, motif_t
     if emission:
         b.inputs["Emission Color"].default_value = (*couleur, 1.0)
         b.inputs["Emission Strength"].default_value = emission
+        # petite texture unie branchee sur l'emission : a l'import, UEFN la met dans Emissive Color
+        img = bpy.data.images.new("T_" + nom + "_Emission", 4, 4, alpha=False)
+        pix = np.array([*vers_srgb(np.array(couleur)), 1.0], dtype=np.float32)
+        img.pixels.foreach_set(np.tile(pix, 16))
+        os.makedirs(TEXTURES, exist_ok=True)
+        img.filepath_raw = os.path.join(TEXTURES, "T_" + nom + "_Emission.png")
+        img.file_format = 'PNG'
+        img.save()
+        te = nt.nodes.new("ShaderNodeTexImage")
+        te.image = img
+        nt.links.new(te.outputs["Color"], b.inputs["Emission Color"])
     m.diffuse_color = (*couleur, 1.0)
     MATS[nom] = m
     return m
@@ -246,6 +265,11 @@ def fusion(objs, nom):
     o = bpy.context.active_object
     o.name = nom
     o.data.name = nom
+    bm = bmesh.new()                                    # nettoyage : sommets en double fusionnes
+    bm.from_mesh(o.data)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.0005)
+    bm.to_mesh(o.data)
+    bm.free()
     # pivot au point (0, 0, 0) du monde
     bpy.context.scene.cursor.location = (0, 0, 0)
     bpy.ops.object.origin_set(type='ORIGIN_CURSOR')
@@ -415,14 +439,21 @@ def eolienne():
     parts = [boite((2.2, 2.2, H_SOCLE), (0, 0, H_SOCLE / 2), GRIS_SOCLE)]
     # mat : pave droit, une colonne de fenetres creusees sur chaque face
     mat = boite((L_MAT, L_MAT, H_MAT), (0, 0, H_SOCLE + H_MAT / 2), GRIS_EOL)
-    coupeurs = []
-    z = H_SOCLE + 0.9
+    coupeurs, contours = [], []
+    z, rang = H_SOCLE + 0.9, 0
     while z < H_SOCLE + H_MAT - 0.6:
-        for nrm in ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0)):
-            coupeurs.append(fenetre(Vector(nrm) * L_MAT / 2 + Vector((0, 0, z)), nrm, 0.5, 0.14))
+        for k, nrm in enumerate(((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0))):
+            centre = Vector(nrm) * L_MAT / 2 + Vector((0, 0, z))
+            coupeurs.append(fenetre(centre, nrm, 0.5, 0.14))
+            if (rang + k) % 2:
+                # fenetre "en contour" : on rebouche le milieu, il ne reste qu'un sillon carre
+                taille = (0.14, 0.3, 0.3) if nrm[0] else (0.3, 0.14, 0.3)
+                contours.append(boite(taille, centre - Vector(nrm) * 0.07, GRIS_EOL))
         z += 1.05
+        rang += 1
     decouper(mat, coupeurs)
     parts.append(mat)
+    parts += contours
     # nacelle : long pave sur le dessus du mat, avec des fenetres sur les cotes et le dessus
     nac = boite((L_NAC, L_MAT, H_NAC), (X_NAC, 0, Z_NACELLE), GRIS_EOL)
     coupeurs = []
@@ -503,19 +534,20 @@ Z_PANNEAU = 3.7
 def panneau_solaire():
     pied = []
     # base large et irreguliere, puis un tronc qui monte en se courbant (comme un arbre)
-    pied.append(tube([(0, 0, 0), (0, 0, 0.3), (0, 0, 0.6), (0, 0, 0.95), (0.05, 0, 1.3)],
-                     [1.35, 1.3, 1.0, 0.62, 0.45], ACIER, "Base", cotes=10, alea=0.12, graine=3))
-    pied.append(tube([(0.05, 0, 1.2), (0.25, 0.05, 2.0), (0.5, 0.1, 2.7), (0.45, 0.05, Z_PANNEAU - 0.35)],
-                     [0.45, 0.34, 0.27, 0.25], ACIER, "Tronc", cotes=8, alea=0.06, graine=4))
+    pied.append(tube([(0, 0, 0), (0, 0, 0.18), (0, 0, 0.42), (0.02, 0, 0.72), (0.04, 0, 1.02), (0.06, 0, 1.3)],
+                     [1.45, 1.42, 1.18, 0.82, 0.56, 0.46], ACIER, "Base", cotes=12, alea=0.15, graine=3))
+    pied.append(tube([(0.06, 0, 1.2), (0.16, 0.03, 1.7), (0.32, 0.08, 2.2), (0.48, 0.1, 2.65), (0.5, 0.07, 3.0),
+                      (0.45, 0.05, Z_PANNEAU - 0.35)],
+                     [0.47, 0.39, 0.33, 0.29, 0.27, 0.25], ACIER, "Tronc", cotes=10, alea=0.08, graine=4))
     # deux bras fins qui partent du tronc vers les bouts du panneau
-    pied.append(tube([(0.3, 0.05, 2.2), (-0.8, 0.0, 2.9), (-1.9, 0.0, Z_PANNEAU - 0.1)],
+    pied.append(tube([(0.3, 0.05, 2.2), (-0.7, 0.0, 2.9), (-1.6, 0.0, Z_PANNEAU - 0.1)],
                      [0.11, 0.09, 0.07], ACIER, "Bras1", cotes=6))
-    pied.append(tube([(0.45, 0.08, 2.4), (1.5, 0.0, 3.1), (2.6, 0.0, Z_PANNEAU - 0.1)],
+    pied.append(tube([(0.45, 0.08, 2.4), (1.2, 0.0, 3.1), (1.8, 0.0, Z_PANNEAU - 0.1)],
                      [0.11, 0.09, 0.07], ACIER, "Bras2", cotes=6))
-    pied.append(boite((0.5, 0.5, 0.15), (0.45, 0, Z_PANNEAU - 0.4), ACIER))
+    pied.append(boite((0.5, 0.5, 0.15), (0.3, 0, Z_PANNEAU - 0.4), ACIER))
 
     # plaque longue : 8 x 4 cellules en 2 moities, inclinee sur son grand cote
-    L, P, EP, joint, milieu = 6.4, 3.4, 0.12, 0.05, 0.12
+    L, P, EP, joint, milieu = 4.9, 2.6, 0.12, 0.05, 0.1
     pan = [boite((L, P, EP), (0, 0, 0), LAVANDE)]
     cols, lignes = 4, 4
     for moitie in (0, 1):
@@ -530,7 +562,7 @@ def panneau_solaire():
                 pan.append(boite((lc, pc, 0.04), (x, y, EP / 2 + 0.005), BLEU_VIF))
     plaque = fusion(pan, "Plaque")
     plaque.rotation_euler = (math.radians(35), 0, 0)   # incline vers -Y
-    plaque.location = (0.4, 0, Z_PANNEAU)
+    plaque.location = (0.0, 0, Z_PANNEAU)
     bpy.ops.object.select_all(action='DESELECT')
     plaque.select_set(True)
     bpy.context.view_layer.objects.active = plaque
@@ -589,7 +621,7 @@ def usine():
         p.append(boite((1.1, 0.06, 1.3), (x, y0 - 0.03, 1.0), VOLET))
         for dz in (-0.35, 0.0, 0.35):
             p.append(boite((0.75, 0.06, 0.07), (x, y0 - 0.06, 1.0 + dz), VITRE))
-    p.append(boite((0.6, 2.8, 2.8), (bx0 - 0.3, -2.4, 1.4), ANNEXE))                # annexe
+    p.append(boite((0.45, 2.8, 2.8), (bx0 - 0.225, -2.4, 1.4), ANNEXE))                # annexe
     p.append(dome(1.25, (-3.6, 1.0, 0), TAS_BLEU, ech=(1, 1, 0.6)))                 # 2 tas derriere
     p.append(dome(1.0, (-1.7, 1.4, 0), TAS_BLEU, ech=(1, 1, 0.65)))
     return fusion(p, "Usine_Electrique")
@@ -675,14 +707,14 @@ def centrale_vapeur():
     # bloc fonce (fenetre jaune + conduit) et cheminee a chevrons
     p.append(boite((1.2, 2.8, 1.2), (1.5, 1.0, 0.6), BLOC_FONCE))
     p.append(boite((0.55, 0.05, 0.35), (1.5, -0.43, 0.75), JAUNE_LUM))
-    p.append(boite((0.45, 0.5, 0.4), (2.32, 0.1, 0.65), BLOC_FONCE))
+    p.append(boite((0.3, 0.5, 0.4), (2.25, 0.1, 0.65), BLOC_FONCE))
     p.append(cylindre(0.56, 0.56, 0.9, (1.5, 1.6, 1.65), CHEM_VAP, cotes=8, rot=(0, 0, math.radians(22.5))))
     p.append(cylindre(0.42, 0.42, 3.9, (1.5, 1.6, 4.05), CHEM_VAP, cotes=8, rot=(0, 0, math.radians(22.5))))
     p.append(cylindre(0.75, 0.75, 0.08, (1.5, 1.6, 4.4), CHEM_VAP, cotes=8, rot=(0, 0, math.radians(22.5))))
     p.append(cylindre(0.47, 0.47, 0.15, (1.5, 1.6, 6.05), CHEM_VAP, cotes=8, rot=(0, 0, math.radians(22.5))))
     # generateur octogonal couche, faces ocre aux 2 bouts
-    gx, gy, gz = -1.9, 1.45, 0.92
-    p.append(boite((1.9, 1.6, 0.1), (gx, gy, 0.05), PLAQUE_GRISE))
+    gx, gy, gz = -1.85, 1.45, 0.92
+    p.append(boite((1.5, 1.6, 0.1), (gx, gy, 0.05), PLAQUE_GRISE))
     p.append(prisme(0.8, 1.3, (gx, gy, gz), GENE))
     for s in (-1, 1):
         p.append(prisme(0.86, 0.12, (gx + s * 0.68, gy, gz), REBORD_VERT))
@@ -696,7 +728,7 @@ def centrale_vapeur():
         p.append(prisme(0.16, 0.1, (-1.05, gy + dy, z), BLOC_FONCE))
     p.append(boite((0.45, 0.35, 0.3), (0.2, 2.05, 0.15), BLOC_FONCE))
     p.append(dome(0.2, (0.2, 2.05, 0.3), TUYAU))
-    decaler(p, 0.0, -0.75)
+    decaler(p, 0.1, -0.75)
     return fusion(p, "Centrale_Vapeur")
 
 
@@ -758,7 +790,7 @@ def usine_grise():
         p.append(cylindre(0.4, 0.4, 0.14, (x, 0.72, 4.88), CHEM_GRIS, cotes=8, rot=r8))
         p.append(cylindre(0.3, 0.3, 0.04, (x, 0.72, 4.95), TOIT_NOIR, cotes=8, rot=r8))
     for x in (-1.6, -0.55, 0.5):                                                            # 3 fenetres
-        p += vitre("-Y", x, y0, 1.2, 0.85, 0.6, 3, VITRE, TOIT_NOIR)
+        p += vitre("-Y", x, y0, 1.15, 0.85, 0.95, 3, VITRE, TOIT_NOIR)
     p.append(cylindre(0.5, 0.5, 2.0, (1.75, 0.6, 1.0), GRIS_USINE, cotes=8, rot=r8))       # cuves
     p.append(cylindre(0.52, 0.4, 0.2, (1.75, 0.6, 2.1), GRIS_USINE, cotes=8, rot=r8))
     p.append(cylindre(0.45, 0.45, 1.3, (1.85, -0.4, 0.65), GRIS_USINE, cotes=8, rot=r8))
@@ -773,7 +805,7 @@ def usine_grise():
 # ---------------------------------------------------------------------------
 BLEU_MACHINE = matiere("Bleu_Machine", (0.021, 0.102, 0.578), rugo=0.5, remplis=0.25)
 BLEU_CLAIR_M = matiere("Bleu_Clair_Machine", (0.102, 0.305, 0.791), rugo=0.3, studs=False)
-EAU = matiere("Eau_Cyan", (0.0, 0.871, 1.0), rugo=0.1, emission=0.5, studs=False)
+EAU = matiere("Eau_Cyan", (0.0, 0.871, 1.0), rugo=0.1, emission=0.5, motif_tex="vagues", n=1, tuile=2.0)
 BLANC_CUVE = matiere("Blanc_Cuve", (0.75, 0.79, 0.87), rugo=0.4, studs=False)
 
 
@@ -813,6 +845,41 @@ PIERRE = matiere("Pierre_Barrage", (0.155, 0.205, 0.352), rugo=0.7, remplis=0.3)
 H_BAR = 2.4
 
 
+def terrain(hauteurs, C, terre, herbe, nom="Terrain"):
+    """Plateau de cases de hauteurs differentes en un seul maillage, sans faces cachees :
+    dessus en herbe, cotes en terre avec une bande d'herbe de 25 cm en haut."""
+    som, faces, mats = [], [], []
+
+    def quad(pts, m):
+        i = len(som)
+        som.extend(pts)
+        faces.append((i, i + 1, i + 2, i + 3))
+        mats.append(m)
+
+    for (i, j), h in hauteurs.items():
+        x0, y0 = -5.12 + i * C, -5.12 + j * C
+        x1, y1 = x0 + C, y0 + C
+        quad([(x0, y0, h), (x1, y0, h), (x1, y1, h), (x0, y1, h)], 1)
+        for (di, dj), (a, b) in (((1, 0), ((x1, y0), (x1, y1))), ((-1, 0), ((x0, y1), (x0, y0))),
+                                 ((0, 1), ((x1, y1), (x0, y1))), ((0, -1), ((x0, y0), (x1, y0)))):
+            hv = hauteurs.get((i + di, j + dj), 0.0)
+            if hv >= h:
+                continue
+            zc = max(hv, h - 0.25)
+            quad([(a[0], a[1], zc), (b[0], b[1], zc), (b[0], b[1], h), (a[0], a[1], h)], 1)
+            if hv < h - 0.25:
+                quad([(a[0], a[1], hv), (b[0], b[1], hv), (b[0], b[1], h - 0.25), (a[0], a[1], h - 0.25)], 0)
+    me = bpy.data.meshes.new(nom)
+    me.from_pydata(som, [], faces)
+    me.materials.append(terre)
+    me.materials.append(herbe)
+    for f, m in zip(me.polygons, mats):
+        f.material_index = m
+    o = bpy.data.objects.new(nom, me)
+    bpy.context.scene.collection.objects.link(o)
+    return o
+
+
 def barrage(nom="Barrage", H=H_BAR, lac_i=(3, 6), lac_j=(3, 8), terre=TERRE, herbe=SOL, pierre=PIERRE,
             eau=EAU, neon=None, blocs=4):
     """Plateau de terre (bord d'herbe) en escaliers, lac au milieu, mur de barrage courbe devant.
@@ -823,6 +890,7 @@ def barrage(nom="Barrage", H=H_BAR, lac_i=(3, 6), lac_j=(3, 8), terre=TERRE, her
     lac = lambda i, j: lac_i[0] <= i <= lac_i[1] and lac_j[0] <= j <= lac_j[1]
     ouverture = lambda i, j: lac_i[0] <= i <= lac_i[1] and j < lac_j[0]
     vides = [(i, j) for i in range(10) for j in range(10) if lac(i, j) or ouverture(i, j)]
+    hauteurs = {}
     for i in range(10):
         for j in range(10):
             if (i, j) in vides:
@@ -831,9 +899,8 @@ def barrage(nom="Barrage", H=H_BAR, lac_i=(3, 6), lac_j=(3, 8), terre=TERRE, her
             h = H if dist <= 2 else float(rng.choice([H, H, H - 0.7]))
             if (i in (0, 9) or j in (0, 9)) and rng.random() < 0.4:
                 h = H - 0.7 if h == H else H - 1.4
-            x, y = -5.12 + (i + 0.5) * C, -5.12 + (j + 0.5) * C
-            p.append(boite((C, C, h - 0.25), (x, y, (h - 0.25) / 2), terre))
-            p.append(boite((C, C, 0.25), (x, y, h - 0.125), herbe))
+            hauteurs[(i, j)] = h
+    p.append(terrain(hauteurs, C, terre, herbe))
     # mur de barrage : arc creux vu de devant, plus epais en bas
     lx = (lac_i[1] - lac_i[0] + 1) * C / 2
     y_lac = -5.12 + lac_j[0] * C
@@ -885,7 +952,7 @@ X_HELICE = 2.05                    # helice devant la tete (+X)
 
 def dirigeable():
     p = []
-    bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1, radius=2.3, location=(0, 0, 0))
+    bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=2, radius=2.3, location=(0, 0, 0))
     corps = bpy.context.active_object
     corps.scale = (1.0, 1.1, 0.95)
     p.append(finir(corps, BEIGE))
@@ -950,8 +1017,8 @@ def centrale_rouge_blanc():
     p.append(boite((2.5, 2.7, 0.15), (2.2, 2.9, 5.37), TOIT_ARDOISE))
     p.append(boite((0.35, 0.35, 1.2), (2.2, 2.9, 6.0), TOIT_ARDOISE))                          # 'T' sur le toit
     p.append(boite((1.6, 0.35, 0.35), (2.2, 2.9, 6.55), TOIT_ARDOISE))
-    p.append(boite((1.3, 3.0, 2.2), (4.6, 1.2, 1.1), GRIS_CLAIR_C))                          # annexe
-    p.append(boite((1.4, 3.1, 0.12), (4.6, 1.2, 2.26), TOIT_ARDOISE))
+    p.append(boite((1.3, 3.0, 2.2), (4.4, 1.2, 1.1), GRIS_CLAIR_C))                          # annexe
+    p.append(boite((1.4, 3.1, 0.12), (4.4, 1.2, 2.26), TOIT_ARDOISE))
     # radiateur a ailettes devant
     p.append(boite((2.6, 1.0, 1.4), (2.3, -0.7, 1.3), GRIS_CLAIR_C))
     for k in range(9):
@@ -995,7 +1062,7 @@ def centrale_tuyaux():
     p.append(boite((1.4, 0.06, 1.2), (-3.9, -2.03, 1.4), GRIS_PALE_X))
     # 2 grosses cheminees inclinees vers l'arriere
     for x in (-1.6, 1.4):
-        a, b = Vector((x, 2.2, 3.4)), Vector((x, 4.6, 9.0))
+        a, b = Vector((x, 2.2, 3.4)), Vector((x, 4.3, 9.0))
         p.append(tube([a, (a + b) / 2, b], [0.6] * 3, GRIS_PALE_X, "Cheminee", cotes=12))
         p.append(tube([b - (b - a).normalized() * 0.4, b + (b - a).normalized() * 0.05], [0.7] * 2,
                       GRIS_PALE, "Bord", cotes=12))
@@ -1070,7 +1137,7 @@ GRIS_BETON = matiere("Gris_Beton", (0.3, 0.32, 0.37), rugo=0.7)
 GRIS_CHEM_LISSE = matiere("Gris_Cheminee_Lisse", (0.33, 0.35, 0.4), rugo=0.6, studs=False)
 DALLE_FONCEE = matiere("Dalle_Foncee", (0.03, 0.032, 0.04), rugo=0.7)
 JAUNE_TUBE = matiere("Jaune_Tube", (0.9, 0.55, 0.0), rugo=0.4, studs=False)
-EAU_BLEUE = matiere("Eau_Bleue", (0.0, 0.2, 0.85), rugo=0.1, emission=0.3, studs=False)
+EAU_BLEUE = matiere("Eau_Bleue", (0.0, 0.2, 0.85), rugo=0.1, emission=0.3, motif_tex="vagues", n=1, tuile=2.0)
 BORD_HERBE = matiere("Bord_Herbe", (0.35, 0.75, 0.02), rugo=0.8, studs=False)
 TOUR_BETON = matiere("Tour_Beton", (0.5, 0.52, 0.56), rugo=0.8, studs=False)
 NOIR_MAT = matiere("Noir_Mat", (0.008, 0.008, 0.01), rugo=0.5, studs=False)
@@ -1094,7 +1161,7 @@ VIOLET_CELL = matiere("Violet_Cellule", (0.5, 0.05, 0.9), emission=1.0, studs=Fa
 TERRE_SOMBRE = matiere("Terre_Sombre", (0.02, 0.02, 0.025), rugo=0.8, motif_tex="dalles", n=2, tuile=1.024)
 DESSUS_SOMBRE = matiere("Dessus_Sombre", (0.05, 0.055, 0.07), rugo=0.6)
 PIERRE_SOMBRE = matiere("Pierre_Sombre", (0.03, 0.035, 0.045), rugo=0.6, remplis=0.3)
-EAU_CYBER = matiere("Eau_Cyber", (0.0, 0.45, 1.0), rugo=0.1, emission=0.8, studs=False)
+EAU_CYBER = matiere("Eau_Cyber", (0.0, 0.45, 1.0), rugo=0.1, emission=0.8, motif_tex="vagues", n=1, tuile=2.0)
 CYAN_NEON = matiere("Cyan_Neon", (0.0, 0.85, 1.0), emission=4.0, studs=False)
 
 
@@ -1116,7 +1183,7 @@ def centrale_gaz():
 #  2. GRANDE STATION DE POMPAGE (1 case) : 2 machines, tuyaux dans un bassin bleu
 # ---------------------------------------------------------------------------
 def grande_station_pompage():
-    p = bassin(0, -0.9, 1.6, EAU_BLEUE, BORD_HERBE)
+    p = bassin(0, -0.75, 1.5, EAU_BLEUE, BORD_HERBE)
     for x in (-1.2, 1.2):
         p.append(boite((1.8, 1.3, 0.9), (x, 1.75, 0.45), NAVY))
         p.append(boite((1.2, 0.9, 0.4), (x, 1.85, 1.1), NAVY))
@@ -1423,6 +1490,158 @@ def vue(objs, chemin, places, cam_pos, cible, lens):
     bpy.ops.render.render(write_still=True)
 
 
+# ---------------------------------------------------------------------------
+#  COLLISIONS SIMPLES (UCX_) : UEFN les reconnait tout seul a l'import
+# ---------------------------------------------------------------------------
+PIECES_TOURNANTES = ("Eolienne_Rotor", "Dirigeable_Helice", "Accelerateur_Particules_Anneau",
+                     "Reacteur_Anti_Matiere_Anneau", "Sphere_Dyson_Cage", "Sphere_Trou_Noir_Cage")
+UNE_CASE = ("Eolienne_Mat", "Panneau_Solaire", "Ferme_Solaire", "Centrale_Vapeur", "Plante_Bio", "Usine_Grise",
+            "Station_Pompage", "Dirigeable", "Centrale_Gaz", "Grande_Station_Pompage", "Case_Sol")
+
+
+def boite_ucx(nom, x0, x1, y0, y1, z0, z1):
+    som = [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0), (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]
+    faces = [(3, 2, 1, 0), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)]
+    me = bpy.data.meshes.new(nom)
+    me.from_pydata(som, [], faces)
+    o = bpy.data.objects.new(nom, me)
+    bpy.context.scene.collection.objects.link(o)
+    o.hide_render = True
+    return o
+
+
+def collisions(o, pas=0.64, max_boites=40):
+    """Boites de collision : la silhouette du batiment vue de dessus, en colonnes regroupees."""
+    arbre = BVHTree.FromObject(o, bpy.context.evaluated_depsgraph_get())
+    xs = [v.co.x for v in o.data.vertices]
+    ys = [v.co.y for v in o.data.vertices]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    nx, ny = max(1, math.ceil((x1 - x0) / pas - 1e-6)), max(1, math.ceil((y1 - y0) / pas - 1e-6))
+    hauts = np.zeros((nx, ny))
+    for i in range(nx):
+        for j in range(ny):
+            for fx in (0.15, 0.5, 0.85):
+                for fy in (0.15, 0.5, 0.85):
+                    pt = arbre.ray_cast(Vector((x0 + (i + fx) * pas, y0 + (j + fy) * pas, 80.0)), Vector((0, 0, -1)))[0]
+                    if pt is not None:
+                        hauts[i, j] = max(hauts[i, j], pt.z)
+    for q in (0.5, 1.0, 2.0, 4.0):
+        H = np.where(hauts > 0.05, np.ceil(hauts / q - 1e-6) * q, 0.0)
+        vu = np.zeros((nx, ny), bool)
+        boites = []
+        for j in range(ny):
+            for i in range(nx):
+                h = H[i, j]
+                if h <= 0 or vu[i, j]:
+                    continue
+                i2 = i
+                while i2 + 1 < nx and H[i2 + 1, j] == h and not vu[i2 + 1, j]:
+                    i2 += 1
+                j2 = j
+                while j2 + 1 < ny and all(H[k, j2 + 1] == h and not vu[k, j2 + 1] for k in range(i, i2 + 1)):
+                    j2 += 1
+                vu[i:i2 + 1, j:j2 + 1] = True
+                boites.append((i, i2, j, j2, h))
+        if len(boites) <= max_boites:
+            break
+    return [boite_ucx("UCX_%s_%02d" % (o.name, k), x0 + i * pas, min(x0 + (i2 + 1) * pas, x1),
+                      y0 + j * pas, min(y0 + (j2 + 1) * pas, y1), 0.0, h)
+            for k, (i, i2, j, j2, h) in enumerate(boites)]
+
+
+def enveloppe(o, zmin):
+    """Collision en une seule forme convexe (pour la tete du dirigeable, qui flotte)."""
+    bm = bmesh.new()
+    for v in o.data.vertices:
+        if v.co.z > zmin:
+            bm.verts.new(v.co)
+    res = bmesh.ops.convex_hull(bm, input=bm.verts)
+    bmesh.ops.delete(bm, geom=list(set(res["geom_interior"]) | set(res["geom_unused"])), context='VERTS')
+    me = bpy.data.meshes.new("UCX_%s_00" % o.name)
+    bm.to_mesh(me)
+    bm.free()
+    c = bpy.data.objects.new(me.name, me)
+    bpy.context.scene.collection.objects.link(c)
+    c.hide_render = True
+    return c
+
+
+def verifier_emprise(o):
+    if o.name in PIECES_TOURNANTES:
+        return
+    demi = 2.56 if o.name in UNE_CASE else 5.12
+    xs = [v.co.x for v in o.data.vertices]
+    ys = [v.co.y for v in o.data.vertices]
+    dep = max(-min(xs), max(xs), -min(ys), max(ys)) - demi
+    if dep > 0.01:
+        print("DEPASSE", o.name, "de %.2f m" % dep)
+
+
+# ---------------------------------------------------------------------------
+#  FUMEE : haut des cheminees (en metres, repere Blender), pour fumee.verse
+# ---------------------------------------------------------------------------
+FUMEE = {
+    "Usine_Electrique": [(-3.0, -3.2, 10.75), (-3.0, -1.45, 10.75)],
+    "Centrale_Vapeur": [(1.6, 0.85, 6.15)],
+    "Plante_Bio": [(0, 1.55, 6.1)],
+    "Usine_Grise": [(-1.65, 0.72, 5.0), (-0.55, 0.72, 5.0), (0.55, 0.72, 5.0)],
+    "Station_Pompage": [(0.1, 0.75, 2.6)],
+    "Centrale_Rouge_Blanc": [(-3.3, 2.0, 7.6), (-2.75, 2.45, 6.4)],
+    "Centrale_Tuyaux": [(-1.6, 4.35, 9.1), (1.4, 4.35, 9.1)],
+    "Centrale_Gaz": [(-1.0, 0.6, 6.7), (0.5, 0.7, 6.7)],
+    "Petite_Centrale_Nucleaire": [(-2.4, 1.6, 8.25)],
+    "Centrale_Nucleaire": [(2.6, 1.8, 7.75)],
+    "Grande_Centrale_Nucleaire": [(-3.0, 2.6, 6.75), (-3.3, -2.3, 5.75)],
+}
+
+
+def ecrire_fumee():
+    with open(os.path.join(SORTIE, "points_fumee.txt"), "w") as f:
+        f.write("# Haut des cheminees, en cm, dans le repere UEFN (X, Y, Z) par rapport au pivot du batiment.\n")
+        f.write("# A copier dans PointsFumee de l'entree du batiment (power_city > Batiments).\n")
+        for nom, pts in FUMEE.items():
+            txt = ", ".join("(%d, %d, %d)" % (round(x * 100), round(-y * 100), round(z * 100)) for x, y, z in pts)
+            f.write("%-28s %s\n" % (nom, txt))
+
+
+# ---------------------------------------------------------------------------
+#  MATERIAU MAITRE : masques en niveaux de gris + tableau des couleurs (optionnel, pour UEFN)
+# ---------------------------------------------------------------------------
+def ecrire_materiau_maitre(objs):
+    d = os.path.join(SORTIE, "materiau_maitre")
+    os.makedirs(d, exist_ok=True)
+    utilises = {m for o in objs for m in o.data.materials if m}
+    masques = {}
+    lignes = ["materiau;couleur;couleur2;masque;intensite;emission"]
+    hexa = lambda c: "#%02X%02X%02X" % tuple(int(round(float(vers_srgb(np.array(x))) * 255)) for x in c)
+    for m in sorted(utilises, key=lambda m: m.name):
+        motif_tex = m.get("motif", "")
+        nom_masque, intens = "", 1.0
+        if motif_tex:
+            cle = (motif_tex, int(m["n"]), float(m["remplis"]), bool(m["aleatoire"]))
+            if cle not in masques:
+                if motif_tex == "damier":
+                    u, v = coord(64 * cle[1])
+                    f = ((np.floor(u * cle[1]) + np.floor(v * cle[1])) % 2)
+                else:
+                    f = motif(motif_tex, cle[1], PX_STUD, cle[3], cle[2])
+                intens = float(f.max())
+                g = f / intens
+                nom_m = "T_Masque_%s_n%d%s%s" % (motif_tex, cle[1], "_r%d" % round(cle[2] * 100) if cle[2] else "",
+                                                 "_alea" if cle[3] else "")
+                img = bpy.data.images.new(nom_m, g.shape[1], g.shape[0], alpha=False)
+                img.pixels.foreach_set(np.dstack((g, g, g, np.ones_like(g))).astype(np.float32).ravel())
+                img.filepath_raw = os.path.join(d, nom_m + ".png")
+                img.file_format = 'PNG'
+                img.save()
+                masques[cle] = (nom_m, intens)
+            nom_masque, intens = masques[cle]
+        lignes.append("%s;%s;%s;%s;%.3f;%.1f" % (m.name, hexa(m["couleur"]), hexa(m["couleur2"]), nom_masque,
+                                                 intens, m.get("emission", 0.0)))
+    with open(os.path.join(d, "materiaux.csv"), "w") as f:
+        f.write("\n".join(lignes) + "\n")
+
+
 def main():
     mat, rotor = eolienne()
     solaire = panneau_solaire()
@@ -1445,15 +1664,30 @@ def main():
     os.makedirs(SORTIE, exist_ok=True)
     for o in objs:
         tri = sum(len(f.vertices) - 2 for f in o.data.polygons)
-        print("MESH", o.name, tri, "triangles")
+        verifier_emprise(o)
+        if o.name in PIECES_TOURNANTES:
+            ucx = []                      # pas de collision sur ce qui tourne
+        elif o.name == "Dirigeable":
+            ucx = [enveloppe(o, Z_DIRIG - 2.4)]
+        elif o.name == "Case_Sol":
+            ucx = [boite_ucx("UCX_Case_Sol_00", -2.56, 2.56, -2.56, 2.56, -0.2, 0.0)]
+        else:
+            ucx = collisions(o)
+        print("MESH", o.name, tri, "triangles,", len(ucx), "boites de collision")
         bpy.ops.object.select_all(action='DESELECT')
+        for c in ucx:
+            c.select_set(True)
         o.select_set(True)
         bpy.context.view_layer.objects.active = o
         bpy.ops.export_scene.fbx(filepath=os.path.join(SORTIE, o.name + ".fbx"), use_selection=True,
                                  object_types={'MESH'}, mesh_smooth_type='FACE',
                                  path_mode='COPY', embed_textures=True)
+        for c in ucx:
+            c.select_set(False)
         bpy.ops.export_scene.gltf(filepath=os.path.join(SORTIE, o.name + ".glb"), use_selection=True,
                                   export_format='GLB')
+    ecrire_fumee()
+    ecrire_materiau_maitre(objs)
     print("Export OK :", SORTIE)
     if APERCU:
         apercu(objs, APERCU)

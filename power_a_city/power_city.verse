@@ -8,6 +8,7 @@ using { /Fortnite.com/Devices }
 using { /Verse.org/Simulation }
 using { /UnrealEngine.com/Temporary/SpatialMath }
 using { /UnrealEngine.com/Temporary/Diagnostics }
+using { /Verse.org/Concurrency }
 
 LargeurMax : int = 8
 
@@ -43,6 +44,10 @@ batiment_def := class<concrete>:
     # true : tourne autour de l'axe vertical (anneaux, cages). false : autour de l'axe X (helices, eolienne)
     @editable
     RotorVertical : logic = false
+    # haut des cheminees (en cm, par rapport au pied du batiment) : voir modeles/points_fumee.txt.
+    # Utilise par fumee.verse (optionnel).
+    @editable
+    PointsFumee : []vector3 = array{}
 
 # Une case de la grille : un bouton + un prop invisible pose au centre de la case.
 parcelle_case := class<concrete>:
@@ -90,6 +95,8 @@ power_city := class(creative_device):
     BoutonsChoix : []button_device = array{}
 
     var Donnees : [agent]joueur_data = map{}
+    # envoye a chaque batiment pose (le batiment + sa position) : fumee.verse l'ecoute
+    BatimentPose : event(tuple(batiment_def, transform)) = event(tuple(batiment_def, transform)){}
     var Selection : [agent]int = map{}
 
     OnBegin<override>()<suspends> : void =
@@ -167,6 +174,7 @@ power_city := class(creative_device):
             Decalage := vector3{X := (B.Largeur - 1) * TailleCase / 2.0, Y := (B.Hauteur - 1) * TailleCase / 2.0, Z := 0.0}
             Pied := T.Translation + Decalage
             SpawnProp(B.Modele, Pied, T.Rotation)
+            BatimentPose.Signal((B, transform{Translation := Pied, Rotation := T.Rotation, Scale := vector3{X := 1.0, Y := 1.0, Z := 1.0}}))
             if (B.AUnRotor?):
                 Resultat := SpawnProp(B.ModeleRotor, Pied + T.Rotation.RotateVector(B.DecalageRotor), T.Rotation)
                 if (Rotor := Resultat(0)?):
