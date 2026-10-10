@@ -6,7 +6,7 @@ Sortie : dossier "poweracity_modeles" de ton dossier utilisateur, un .fbx par me
 Chaque batiment tient sur 1 case de 5 m (512 cm). Le pivot de chaque mesh est au point (0, 0, 0) :
   Eolienne_Mat       : socle + mat + nacelle. Pivot au sol, au centre.
   Eolienne_Rotor     : moyeu + 3 pales. Pivot au centre du moyeu (pour le faire tourner).
-                       A placer a X = +90 cm, Z = +1285 cm par rapport a Eolienne_Mat.
+                       A placer a X = +75 cm, Z = +1370 cm par rapport a Eolienne_Mat.
   Panneau_Solaire    : pied + panneau incline. Pivot au sol, au centre.
   Plante_Bio         : petite centrale biomasse (batiment, silo, cheminee, cuve). Pivot au sol.
 Dans UEFN : importe les .fbx, puis Collision Complexity = "Use Complex Collision As Simple".
@@ -109,52 +109,65 @@ VERT_LUM = matiere("Vert_Lumiere", (0.30, 1.0, 0.30), emission=3.0)
 # ---------------------------------------------------------------------------
 #  EOLIENNE
 # ---------------------------------------------------------------------------
-H_SOCLE = 0.4
-H_MAT = 12.0
-R_BAS, R_HAUT = 0.75, 0.38          # rayon (au coin) du mat carre en bas et en haut
-Z_NACELLE = H_SOCLE + H_MAT + 0.45
-X_MOYEU = 0.9                        # le rotor est devant la nacelle, cote +X
+H_SOCLE = 0.35
+H_MAT = 13.0
+R_BAS, R_HAUT = 0.60, 0.46           # rayon (au coin) du mat carre en bas et en haut
+Z_NACELLE = H_SOCLE + H_MAT + 0.35
+X_MOYEU = 0.75                       # le rotor est devant la nacelle, cote +X
+GRIS_EOL = matiere("Gris_Eolienne", (0.74, 0.77, 0.82), metal=0.1, rugo=0.55)
+GRIS_SOCLE = matiere("Gris_Socle", (0.85, 0.87, 0.90), rugo=0.6)
+
+
+def decouper(obj, coupeurs):
+    """Perce obj avec les coupeurs (boolean difference), puis supprime les coupeurs."""
+    c = fusion(coupeurs, "Coupeurs")
+    mod = obj.modifiers.new("trous", 'BOOLEAN')
+    mod.operation = 'DIFFERENCE'
+    mod.object = c
+    mod.solver = 'EXACT'
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+    bpy.data.objects.remove(c, do_unlink=True)
 
 
 def eolienne():
     parts = []
-    parts.append(boite((1.8, 1.8, H_SOCLE), (0, 0, H_SOCLE / 2), BETON))
+    parts.append(boite((1.3, 1.3, H_SOCLE), (0, 0, H_SOCLE / 2), GRIS_SOCLE))
     # mat carre qui s'affine (cone a 4 cotes tourne de 45 degres)
-    parts.append(cylindre(R_BAS, R_HAUT, H_MAT, (0, 0, H_SOCLE + H_MAT / 2), GRIS_MAT, cotes=4,
-                          rot=(0, 0, math.radians(45))))
-    # petites ouvertures carrees sur les 4 faces (comme le treillis du jeu Roblox)
-    nb = 14
+    mat = cylindre(R_BAS, R_HAUT, H_MAT, (0, 0, H_SOCLE + H_MAT / 2), GRIS_EOL, cotes=4,
+                   rot=(0, 0, math.radians(45)))
+    # treillis : 2 colonnes de trous carres qui traversent le mat de part en part, sur X et sur Y
+    coupeurs = []
+    nb = 18
     for i in range(nb):
-        t = (i + 0.6) / (nb + 0.4)
+        t = (i + 0.7) / (nb + 0.2)
         z = H_SOCLE + t * H_MAT
         demi = (R_BAS + (R_HAUT - R_BAS) * t) * math.cos(math.radians(45))
-        cote = 0.32 * (1.0 - 0.45 * t)
-        for col in (-0.5, 0.5):
-            dec = col * demi * 0.9
-            for ang in range(4):
-                a = math.radians(90 * ang)
-                n = Vector((math.cos(a), math.sin(a), 0))
-                tg = Vector((-math.sin(a), math.cos(a), 0))
-                p = n * (demi + 0.01) + tg * dec + Vector((0, 0, z))
-                parts.append(boite((0.05, cote, cote), p, GRIS_FONCE, rot=(0, 0, a)))
-    # nacelle
-    parts.append(boite((2.4, 1.0, 0.95), (-0.3, 0, Z_NACELLE), GRIS_CLAIR))
-    parts.append(boite((0.6, 0.6, 0.15), (-1.0, 0, Z_NACELLE + 0.55), GRIS_FONCE))
+        cote = demi * 0.55
+        for col in (-1, 1):
+            dec = col * demi * 0.45
+            coupeurs.append(boite((4.0, cote, cote), (0, dec, z), GRIS_EOL))
+            coupeurs.append(boite((cote, 4.0, cote), (dec, 0, z), GRIS_EOL))
+    decouper(mat, coupeurs)
+    parts.append(mat)
+    # nacelle (petite) + moyeu arriere
+    parts.append(boite((1.2, 0.6, 0.6), (-0.1, 0, Z_NACELLE), GRIS_EOL))
     mat = fusion(parts, "Eolienne_Mat")
 
     # rotor : construit autour de (0, 0, 0) = centre du moyeu, pales dans le plan YZ
     rot = []
-    rot.append(cylindre(0.42, 0.05, 0.9, (0.25, 0, 0), BLANC, rot=(0, math.radians(90), 0)))
-    rot.append(cylindre(0.42, 0.42, 0.4, (-0.3, 0, 0), BLANC, rot=(0, math.radians(90), 0)))
+    rot.append(sphere(0.32, (0.05, 0, 0), GRIS_EOL, ech=(1.3, 1, 1)))
     for k in range(3):
         a = math.radians(120 * k)
-        long = 5.8
-        # une pale = cone plat a 4 cotes, large pres du moyeu, fine au bout
-        p = cylindre(0.42, 0.06, long, (0, 0, 0), BLANC, cotes=4)
-        p.scale = (0.22, 1.0, 1.0)
-        p.location = (0, -math.sin(a) * (long / 2 + 0.3), math.cos(a) * (long / 2 + 0.3))
+        long = 8.0
+        # une pale = cone plat a 4 cotes, large pres du moyeu, fine au bout, un peu vrillee
+        p = cylindre(0.26, 0.04, long, (0, 0, 0), GRIS_EOL, cotes=4)
+        p.scale = (0.18, 1.0, 1.0)
+        p.rotation_euler = (0, 0, math.radians(20))
+        finir(p, GRIS_EOL)
+        p.location = (0, -math.sin(a) * (long / 2 + 0.2), math.cos(a) * (long / 2 + 0.2))
         p.rotation_euler = (a, 0, 0)
-        finir(p, BLANC)
+        finir(p, GRIS_EOL)
         bpy.ops.object.transform_apply(location=True)
         rot.append(p)
     rotor = fusion(rot, "Eolienne_Rotor")
@@ -164,40 +177,43 @@ def eolienne():
 # ---------------------------------------------------------------------------
 #  PANNEAU SOLAIRE
 # ---------------------------------------------------------------------------
+BLEU_VIF = matiere("Bleu_Vif", (0.04, 0.12, 0.95), metal=0.2, rugo=0.3)
+LAVANDE = matiere("Lavande", (0.80, 0.80, 1.0), metal=0.2, rugo=0.4)
+
+
+ACIER = matiere("Acier_Fonce", (0.33, 0.35, 0.40), metal=0.5, rugo=0.45)
+
+
 def panneau_solaire():
     pied = []
-    pied.append(boite((1.2, 1.2, 0.25), (0, 0, 0.125), BETON))
-    pied.append(cylindre(0.14, 0.14, 2.0, (0, 0, 1.2), GRIS_MAT, cotes=10))
-    pied.append(boite((0.5, 0.5, 0.3), (0, 0, 2.2), GRIS_MAT))
+    # socle octogonal evase + colonne + tete qui s'elargit
+    pied.append(cylindre(1.25, 0.85, 0.35, (0, 0, 0.175), ACIER, cotes=8))
+    pied.append(cylindre(0.85, 0.30, 0.45, (0, 0, 0.575), ACIER, cotes=8))
+    pied.append(cylindre(0.24, 0.18, 1.9, (0, 0, 1.75), ACIER, cotes=8))
+    pied.append(cylindre(0.18, 0.42, 0.45, (0, 0, 2.9), ACIER, cotes=8))
+    pied.append(boite((0.9, 0.9, 0.15), (0, 0, 3.15), ACIER))
 
-    # le panneau est construit a plat, face vers -Y, puis incline
-    L, Ht, EP = 3.8, 3.8, 0.12
-    pan = []
-    pan.append(boite((L, EP, Ht), (0, 0, 0), CADRE))
-    cols, lignes = 4, 3
-    marge, joint = 0.12, 0.06
+    # plaque presque a plat (face vers le haut), 2 moities de 4 x 2 cellules
+    L, P, EP, joint = 4.6, 3.2, 0.14, 0.06
+    pan = [boite((L, P, EP), (0, 0, 0), LAVANDE)]
+    cols, lignes = 4, 2
     for moitie in (0, 1):
-        z0 = -Ht / 2 + marge if moitie == 0 else joint * 1.5
-        hm = Ht / 2 - marge - joint * 1.5
-        lc = (L - 2 * marge - (cols - 1) * joint) / cols
-        hc = (hm - (lignes - 1) * joint) / lignes
+        y0 = -P / 2 if moitie == 0 else joint
+        pm = P / 2 - joint
+        lc = (L - (cols + 1) * joint) / cols
+        pc = (pm - (lignes + 1) * joint) / lignes
         for c in range(cols):
             for l in range(lignes):
-                x = -L / 2 + marge + lc / 2 + c * (lc + joint)
-                z = z0 + hc / 2 + l * (hc + joint)
-                pan.append(boite((lc, 0.04, hc), (x, -EP / 2 - 0.01, z), BLEU_CELL))
+                x = -L / 2 + joint + lc / 2 + c * (lc + joint)
+                y = y0 + joint + pc / 2 + l * (pc + joint)
+                pan.append(boite((lc, pc, 0.04), (x, y, EP / 2 + 0.005), BLEU_VIF))
     plaque = fusion(pan, "Plaque")
-    plaque.rotation_euler = (math.radians(-35), 0, 0)   # incline vers le ciel
-    plaque.location = (0, 0, 2.35 + 0.0)
+    plaque.rotation_euler = (math.radians(25), 0, 0)   # incline vers -Y
+    plaque.location = (0, 0, 3.45)
     bpy.ops.object.select_all(action='DESELECT')
     plaque.select_set(True)
     bpy.context.view_layer.objects.active = plaque
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-    # la plaque doit etre au-dessus du sol : on la remonte de sa demi-hauteur inclinee
-    bas = min((plaque.matrix_world @ v.co).z for v in plaque.data.vertices)
-    plaque.location.z += 0.6 - bas
-    bpy.ops.object.transform_apply(location=True)
-    pied[-1].location.z = 0
     return fusion(pied + [plaque], "Panneau_Solaire")
 
 
@@ -236,7 +252,7 @@ def apercu(objs, chemin):
     sc = bpy.context.scene
     # copies temporaires placees cote a cote (les originaux restent a (0, 0, 0) pour l'export)
     places = {"Eolienne_Mat": (0, 0, 0), "Eolienne_Rotor": (X_MOYEU, 0, Z_NACELLE),
-              "Panneau_Solaire": (0, 6.5, 0), "Plante_Bio": (0, -6.5, 0)}
+              "Panneau_Solaire": (3, 8, 0), "Plante_Bio": (-6, -7, 0)}
     copies = []
     for o in objs:
         c = o.copy()
@@ -245,21 +261,21 @@ def apercu(objs, chemin):
         c.location = places[o.name]
         copies.append(c)
         o.hide_render = True
-    sol_mat = matiere("Herbe", (0.25, 0.85, 0.10), rugo=0.9)
+    sol_mat = matiere("Herbe", (0.20, 0.75, 0.05), rugo=0.9)
     bpy.ops.mesh.primitive_plane_add(size=60, location=(0, 0, 0))
     finir(bpy.context.active_object, sol_mat)
 
     w = bpy.data.worlds.new("Ciel")
     w.use_nodes = True
     w.node_tree.nodes["Background"].inputs["Color"].default_value = (0.45, 0.75, 1.0, 1)
-    w.node_tree.nodes["Background"].inputs["Strength"].default_value = 0.9
+    w.node_tree.nodes["Background"].inputs["Strength"].default_value = 0.45
     sc.world = w
     bpy.ops.object.light_add(type='SUN', rotation=(math.radians(40), math.radians(15), math.radians(-30)))
-    bpy.context.active_object.data.energy = 4.0
+    bpy.context.active_object.data.energy = 3.5
 
-    bpy.ops.object.camera_add(location=(36, 4, 12))
+    bpy.ops.object.camera_add(location=(26, -24, 7))
     cam = bpy.context.active_object
-    cible = Vector((0, 0, 7.5))
+    cible = Vector((0, 0, 7.0))
     cam.rotation_euler = (cible - cam.location).to_track_quat('-Z', 'Y').to_euler()
     cam.data.lens = 35
     sc.camera = cam
