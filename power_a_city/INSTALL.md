@@ -16,3 +16,15 @@ chez toi. Il n'a pas encore ete compile, donc colle les erreurs de Verse ici et 
 Limites de cette premiere version : pas d'apercu fantome (Verse n'a pas de rayon camera, on
 vise la case et on interagit avec son bouton), pas de HUD (les infos sortent en Print),
 pas encore de marteau/retrait, ni de sauvegarde.
+
+## Modeles 3D (eolienne, panneau solaire, plante bio)
+
+Les .fbx sont dans `modeles/` (ou relance `batiments.py` dans Blender).
+1. Dans UEFN, Content Browser > Import > choisis les 4 .fbx. Pour chacun : Collision Complexity =
+   "Use Complex Collision As Simple".
+2. Clic droit sur chaque mesh > Create Blueprint Class (parent : creative_prop) pour obtenir un
+   `creative_prop_asset` utilisable par Verse.
+3. Dans `power_city` > Batiments, cree une entree "Eolienne" :
+   Modele = Eolienne_Mat, AUnRotor = true, ModeleRotor = Eolienne_Rotor,
+   DecalageRotor = (90, 0, 1285), DureeTour = 4 secondes.
+   Le rotor apparait avec le mat et tourne tout seul.

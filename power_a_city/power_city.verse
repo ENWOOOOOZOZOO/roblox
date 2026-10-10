@@ -29,6 +29,17 @@ batiment_def := class<concrete>:
     Puissance : int = 2
     @editable
     ArgentParSeconde : int = 5
+    # partie qui tourne (rotor de l'eolienne). Laisse AUnRotor a false pour les autres batiments.
+    @editable
+    AUnRotor : logic = false
+    @editable
+    ModeleRotor : creative_prop_asset = DefaultCreativePropAsset
+    # position du moyeu par rapport au pied du batiment (en cm)
+    @editable
+    DecalageRotor : vector3 = vector3{X := 90.0, Y := 0.0, Z := 1285.0}
+    # secondes pour faire un tour complet
+    @editable
+    DureeTour : float = 4.0
 
 # Une case de la grille : un bouton + un prop invisible pose au centre de la case.
 parcelle_case := class<concrete>:
@@ -151,7 +162,12 @@ power_city := class(creative_device):
             # pose le modele, centre sur l'emprise du batiment
             T := C.Repere.GetTransform()
             Decalage := vector3{X := (B.Largeur - 1) * TailleCase / 2.0, Y := (B.Hauteur - 1) * TailleCase / 2.0, Z := 0.0}
-            SpawnProp(B.Modele, T.Translation + Decalage, T.Rotation)
+            Pied := T.Translation + Decalage
+            SpawnProp(B.Modele, Pied, T.Rotation)
+            if (B.AUnRotor?):
+                Resultat := SpawnProp(B.ModeleRotor, Pied + T.Rotation.RotateVector(B.DecalageRotor), T.Rotation)
+                if (Rotor := Resultat(0)?):
+                    spawn{FaireTourner(Rotor, B.DureeTour)}
             set D.Argent -= B.Prix
             set D.PuissanceProduite += B.Puissance
             set D.ArgentParSeconde += B.ArgentParSeconde
@@ -167,6 +183,14 @@ power_city := class(creative_device):
                 for (Index -> _ : P.Cases):
                     ActiverCase(P, Index)
                 Print("Parcelle agrandie : {P.Taille}x{P.Taille}")
+
+    # fait tourner le rotor autour de son axe (l'axe X du mesh), un tiers de tour a la fois
+    FaireTourner(Rotor : creative_prop, DureeTour : float)<suspends> : void =
+        loop:
+            if (not Rotor.IsValid[]):
+                break
+            T := Rotor.GetTransform()
+            Rotor.MoveTo(T.Translation, T.Rotation.ApplyRoll(2.0 * PiFloat / 3.0), DureeTour / 3.0)
 
     # ---------- economie et jauge de la ville ----------
     Boucle()<suspends> : void =
