@@ -40,6 +40,9 @@ batiment_def := class<concrete>:
     # secondes pour faire un tour complet
     @editable
     DureeTour : float = 4.0
+    # true : tourne autour de l'axe vertical (anneaux, cages). false : autour de l'axe X (helices, eolienne)
+    @editable
+    RotorVertical : logic = false
 
 # Une case de la grille : un bouton + un prop invisible pose au centre de la case.
 parcelle_case := class<concrete>:
@@ -167,7 +170,7 @@ power_city := class(creative_device):
             if (B.AUnRotor?):
                 Resultat := SpawnProp(B.ModeleRotor, Pied + T.Rotation.RotateVector(B.DecalageRotor), T.Rotation)
                 if (Rotor := Resultat(0)?):
-                    spawn{FaireTourner(Rotor, B.DureeTour)}
+                    spawn{FaireTourner(Rotor, B.DureeTour, B.RotorVertical)}
             set D.Argent -= B.Prix
             set D.PuissanceProduite += B.Puissance
             set D.ArgentParSeconde += B.ArgentParSeconde
@@ -184,13 +187,20 @@ power_city := class(creative_device):
                     ActiverCase(P, Index)
                 Print("Parcelle agrandie : {P.Taille}x{P.Taille}")
 
-    # fait tourner le rotor autour de son axe (l'axe X du mesh), un tiers de tour a la fois
-    FaireTourner(Rotor : creative_prop, DureeTour : float)<suspends> : void =
+    # fait tourner le rotor, un tiers de tour a la fois : autour de l'axe X du mesh (helices)
+    # ou autour de l'axe vertical (anneaux, cages)
+    FaireTourner(Rotor : creative_prop, DureeTour : float, Vertical : logic)<suspends> : void =
+        Angle := 2.0 * PiFloat / 3.0
         loop:
             if (not Rotor.IsValid[]):
                 break
             T := Rotor.GetTransform()
-            Rotor.MoveTo(T.Translation, T.Rotation.ApplyRoll(2.0 * PiFloat / 3.0), DureeTour / 3.0)
+            var Cible : rotation = T.Rotation
+            if (Vertical?):
+                set Cible = T.Rotation.ApplyYaw(Angle)
+            else:
+                set Cible = T.Rotation.ApplyRoll(Angle)
+            Rotor.MoveTo(T.Translation, Cible, DureeTour / 3.0)
 
     # ---------- economie et jauge de la ville ----------
     Boucle()<suspends> : void =
