@@ -6,13 +6,13 @@ Sortie : dossier "poweracity_modeles" de ton dossier utilisateur, un .fbx par me
 Chaque batiment tient sur 1 case de 5 m (512 cm). Le pivot de chaque mesh est au point (0, 0, 0) :
   Eolienne_Mat       : socle + mat + nacelle. Pivot au sol, au centre.
   Eolienne_Rotor     : moyeu + 3 pales. Pivot au centre du moyeu (pour le faire tourner).
-                       A placer a X = +75 cm, Z = +1395 cm par rapport a Eolienne_Mat.
+                       A placer a X = +265 cm, Z = +1310 cm par rapport a Eolienne_Mat.
   Panneau_Solaire    : pied + panneau incline. Pivot au sol, au centre.
   Plante_Bio         : petite centrale biomasse (batiment, silo, cheminee, cuve). Pivot au sol.
   Case_Sol           : dalle d'herbe de 512 x 512 cm (une case de la grille), dessus a Z = 0.
-Texture "studs" (facon Roblox) sur le sol : 1 case = 6 studs. Les batiments sont lisses comme dans
-le jeu Roblox (STUDS_SUR_BATIMENTS = True pour leur mettre aussi les studs). Les textures sont dans
-les .fbx (et aussi en .png dans le dossier "textures").
+Texture "studs" facon Roblox (fin contour en carre arrondi) sur le sol, le pied du panneau et la plante
+bio : 1 case = 6 studs. L'eolienne est lisse (gris uni + fenetres carrees), comme dans le jeu.
+Les textures sont dans les .fbx (et aussi en .png dans le dossier "textures").
 Dans UEFN : importe les .fbx, puis Collision Complexity = "Use Complex Collision As Simple".
 """
 import bpy
@@ -31,9 +31,9 @@ TEXTURES = os.path.join(SORTIE, "textures")
 STUD = 5.12 / 6
 STUDS_PAR_TEXTURE = 2         # la texture des batiments couvre 2 x 2 studs
 PX_STUD = 128                 # resolution : pixels par stud
-# Dans le jeu Roblox, seul le sol a des studs : l'eolienne et le panneau sont lisses.
-# Mets True pour mettre aussi les studs sur les batiments.
-STUDS_SUR_BATIMENTS = os.environ.get("POWERACITY_STUDS_BATIMENTS", "") == "1"
+# Les studs vont sur le sol, le pied du panneau et la plante bio (l'eolienne reste lisse).
+# Mets False pour enlever les studs de tous les batiments.
+STUDS_SUR_BATIMENTS = True
 
 # ---------------------------------------------------------------------------
 #  OUTILS
@@ -42,30 +42,33 @@ MATS = {}
 
 
 def motif_studs(n, px, aleatoire=False):
-    """Facteur de luminosite (n*px x n*px) : un sillon autour de chaque stud + un plot rond en relief,
-    eclaire d'en haut a gauche (ombre et reflet dessines dans la couleur, comme les studs Roblox)."""
-    t = (np.arange(px) + 0.5) / px
+    """Facteur de luminosite (n*px x n*px) : sur chaque stud, un carre aux coins arrondis grave dans la
+    surface (comme la texture du jeu Roblox), eclaire d'en haut a gauche. Pas de quadrillage entre les studs."""
+    t = (np.arange(px) + 0.5) / px - 0.5
     x, y = np.meshgrid(t, t)
-    bord = np.minimum(np.minimum(x, 1 - x), np.minimum(y, 1 - y))
-    sillon = np.clip(bord / 0.035, 0, 1)
-    r = np.hypot(x - 0.5, y - 0.5)
-    plot = 1 - np.clip((r - 0.29) / 0.035 + 0.5, 0, 1)
-    h = plot * 1.0 - (1 - sillon) * 0.7
+    demi, coin, w = 0.24, 0.11, 0.028
+    qx, qy = np.abs(x) - (demi - coin), np.abs(y) - (demi - coin)
+    d = np.hypot(np.maximum(qx, 0), np.maximum(qy, 0)) + np.minimum(np.maximum(qx, qy), 0) - coin
+    sillon = np.exp(-(d / w) ** 2)
+    h = -sillon
     gy, gx = np.gradient(h)
-    k = px / 12.0
+    k = px / 10.0
     nrm = np.dstack((-gx * k, -gy * k, np.ones_like(h)))
     nrm /= np.linalg.norm(nrm, axis=2, keepdims=True)
     lum = np.array([-1.0, -1.0, 1.4])
     lum /= np.linalg.norm(lum)
     ombre = (nrm @ lum) / lum[2]
-    f = np.clip(1 + 0.35 * (ombre - 1), 0.6, 1.3)
-    f *= 0.90 + 0.10 * sillon            # sillon un peu plus sombre
-    f *= 1 + 0.03 * plot                 # dessus du plot legerement plus clair
+    # texture simple : un fin contour plus sombre, a peine en relief
+    f = np.clip(1 + 0.15 * (ombre - 1), 0.85, 1.15) * (1 - 0.22 * sillon)
     tuile = np.tile(f, (n, n))
     if aleatoire:
-        # herbe Roblox : certains studs plus fonces, au hasard (motif fixe, qui se repete sans couture)
-        rng = np.random.default_rng(7)
-        teinte = rng.choice([1.0, 1.0, 1.0, 0.9, 0.8], size=(n, n))
+        # taches plus foncees : des groupes de studs colles (motif fixe qui se raccorde sans couture)
+        rng = np.random.default_rng(11)
+        tache = rng.random((n, n)) < 0.10
+        for _ in range(2):
+            voisins = (np.roll(tache, 1, 0) | np.roll(tache, -1, 0) | np.roll(tache, 1, 1) | np.roll(tache, -1, 1))
+            tache = tache | (voisins & (rng.random((n, n)) < 0.4))
+        teinte = np.where(tache, 0.80, 1.0)
         tuile *= np.kron(teinte, np.ones((px, px)))
     return tuile
 
@@ -203,68 +206,97 @@ SOL = matiere("Sol_Herbe", (0.20, 0.72, 0.03), rugo=0.9, studs=True, n=6, aleato
 
 
 # ---------------------------------------------------------------------------
-#  EOLIENNE
+#  EOLIENNE (tout en blocs, facon Roblox)
 # ---------------------------------------------------------------------------
-H_SOCLE = 0.6
-H_MAT = 13.0
-R_BAS, R_HAUT = 1.0, 0.72           # rayon (au coin) du mat carre en bas et en haut
-Z_NACELLE = H_SOCLE + H_MAT + 0.35
-X_MOYEU = 0.75                       # le rotor est devant la nacelle, cote +X
-GRIS_EOL = matiere("Gris_Eolienne", (0.55, 0.58, 0.66), metal=0.1, rugo=0.55)
-GRIS_SOCLE = matiere("Gris_Socle", (0.66, 0.68, 0.74), rugo=0.6)
+H_SOCLE = 0.5
+H_MAT = 12.0
+L_MAT = 1.2                          # le mat est un pave carre de 1,2 m de cote
+H_NAC = 1.2                          # nacelle : pave de 3,4 x 1,2 x 1,2 m pose sur le mat
+L_NAC = 3.4
+X_NAC = 0.5                          # la nacelle depasse vers l'avant (+X), cote rotor
+Z_NACELLE = H_SOCLE + H_MAT + H_NAC / 2
+X_MOYEU = X_NAC + L_NAC / 2 + 0.45   # centre du moyeu (pivot du rotor)
+# l'eolienne est lisse (gris uni + fenetres carrees), comme dans le jeu
+GRIS_EOL = matiere("Gris_Eolienne", (0.55, 0.58, 0.66), metal=0.1, rugo=0.55, studs=False)
+GRIS_SOCLE = matiere("Gris_Socle", (0.62, 0.64, 0.70), rugo=0.6, studs=False)
+GRIS_FENETRE = matiere("Gris_Fenetre", (0.34, 0.36, 0.43), rugo=0.7, studs=False)
+
+# orientation du coupeur (cone a 4 cotes) pour creuser vers l'interieur de chaque face
+ORIENT = {(1, 0, 0): (0, -90, 0), (-1, 0, 0): (0, 90, 0), (0, 1, 0): (90, 0, 0),
+          (0, -1, 0): (-90, 0, 0), (0, 0, 1): (180, 0, 0)}
+
+
+def fenetre(centre, normale, taille, prof):
+    """Coupeur pour une fenetre carree creusee, aux bords en biais (comme dans le jeu)."""
+    marge = 0.1
+    longueur = prof + marge
+    n = Vector(normale)
+    c = Vector(centre) + n * (marge - prof) / 2
+    r = taille * 0.7071 * (1 + 0.15 * marge / longueur)
+    o = cylindre(r, r * 0.55, longueur, c, GRIS_FENETRE, cotes=4, rot=(0, 0, math.radians(45)))
+    o.rotation_euler = tuple(math.radians(v) for v in ORIENT[normale])
+    return finir(o, GRIS_FENETRE)
 
 
 def decouper(obj, coupeurs):
-    """Perce obj avec les coupeurs (boolean difference), puis supprime les coupeurs."""
+    """Creuse obj avec les coupeurs (boolean difference), puis supprime les coupeurs."""
     c = fusion(coupeurs, "Coupeurs")
     mod = obj.modifiers.new("trous", 'BOOLEAN')
     mod.operation = 'DIFFERENCE'
     mod.object = c
     mod.solver = 'EXACT'
+    mod.material_mode = 'TRANSFER'      # le fond des fenetres prend la couleur du coupeur
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.modifier_apply(modifier=mod.name)
     bpy.data.objects.remove(c, do_unlink=True)
 
 
+def chanfrein(o, largeur):
+    mod = o.modifiers.new("chanfrein", 'BEVEL')
+    mod.width = largeur
+    mod.segments = 1
+    bpy.context.view_layer.objects.active = o
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+    return o
+
+
 def eolienne():
-    parts = []
-    parts.append(boite((2.0, 2.0, H_SOCLE), (0, 0, H_SOCLE / 2), GRIS_SOCLE))
-    # mat carre qui s'affine (cone a 4 cotes tourne de 45 degres)
-    mat = cylindre(R_BAS, R_HAUT, H_MAT, (0, 0, H_SOCLE + H_MAT / 2), GRIS_EOL, cotes=4,
-                   rot=(0, 0, math.radians(45)))
-    # treillis : 2 colonnes de trous carres qui traversent le mat de part en part, sur X et sur Y
+    parts = [boite((2.2, 2.2, H_SOCLE), (0, 0, H_SOCLE / 2), GRIS_SOCLE)]
+    # mat : pave droit, une colonne de fenetres creusees sur chaque face
+    mat = boite((L_MAT, L_MAT, H_MAT), (0, 0, H_SOCLE + H_MAT / 2), GRIS_EOL)
     coupeurs = []
-    nb = 16
-    for i in range(nb):
-        t = (i + 0.7) / (nb + 0.2)
-        z = H_SOCLE + t * H_MAT
-        demi = (R_BAS + (R_HAUT - R_BAS) * t) * math.cos(math.radians(45))
-        cote = demi * 0.5
-        for col in (-1, 1):
-            dec = col * demi * 0.45
-            coupeurs.append(boite((4.0, cote, cote), (0, dec, z), GRIS_EOL))
-            coupeurs.append(boite((cote, 4.0, cote), (dec, 0, z), GRIS_EOL))
+    z = H_SOCLE + 0.9
+    while z < H_SOCLE + H_MAT - 0.6:
+        for nrm in ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0)):
+            coupeurs.append(fenetre(Vector(nrm) * L_MAT / 2 + Vector((0, 0, z)), nrm, 0.5, 0.14))
+        z += 1.05
     decouper(mat, coupeurs)
     parts.append(mat)
-    # coeur sombre a l'interieur : les trous paraissent sombres au lieu de laisser voir le ciel
-    parts.append(cylindre(R_BAS * 0.62, R_HAUT * 0.62, H_MAT - 0.2, (0, 0, H_SOCLE + H_MAT / 2), GRIS_FONCE,
-                          cotes=4, rot=(0, 0, math.radians(45))))
-    # nacelle (petite) + moyeu arriere
-    parts.append(boite((1.2, 0.6, 0.6), (-0.1, 0, Z_NACELLE), GRIS_EOL))
+    # nacelle : long pave sur le dessus du mat, avec des fenetres sur les cotes et le dessus
+    nac = boite((L_NAC, L_MAT, H_NAC), (X_NAC, 0, Z_NACELLE), GRIS_EOL)
+    coupeurs = []
+    for x in (-0.7, 0.45, 1.6):
+        for nrm in ((0, 1, 0), (0, -1, 0)):
+            coupeurs.append(fenetre((x, nrm[1] * L_MAT / 2, Z_NACELLE), nrm, 0.5, 0.12))
+        coupeurs.append(fenetre((x, 0, Z_NACELLE + H_NAC / 2), (0, 0, 1), 0.5, 0.12))
+    coupeurs.append(fenetre((X_NAC - L_NAC / 2, 0, Z_NACELLE), (-1, 0, 0), 0.5, 0.12))
+    decouper(nac, coupeurs)
+    parts.append(nac)
     mat = fusion(parts, "Eolienne_Mat")
 
     # rotor : construit autour de (0, 0, 0) = centre du moyeu, pales dans le plan YZ
-    rot = []
-    rot.append(sphere(0.32, (0.05, 0, 0), GRIS_EOL, ech=(1.3, 1, 1)))
+    moyeu = chanfrein(boite((0.9, 1.1, 1.1), (0, 0, 0), GRIS_EOL), 0.18)
+    rot = [moyeu]
     for k in range(3):
         a = math.radians(120 * k)
-        long = 8.0
-        # une pale = cone plat a 4 cotes, large pres du moyeu, fine au bout, un peu vrillee
-        p = cylindre(0.26, 0.04, long, (0, 0, 0), GRIS_EOL, cotes=4)
-        p.scale = (0.18, 1.0, 1.0)
-        p.rotation_euler = (0, 0, math.radians(20))
+        long = 7.5
+        # pale pointue : section en losange aplati, un peu vrillee
+        p = cylindre(0.4, 0.02, long, (0, 0, 0), GRIS_EOL, cotes=4)
+        p.scale = (0.3, 1.0, 1.0)
         finir(p, GRIS_EOL)
-        p.location = (0, -math.sin(a) * (long / 2 + 0.2), math.cos(a) * (long / 2 + 0.2))
+        p.rotation_euler = (0, 0, math.radians(25))
+        finir(p, GRIS_EOL)
+        p.location = (0.05, -math.sin(a) * (long / 2 + 0.35), math.cos(a) * (long / 2 + 0.35))
         p.rotation_euler = (a, 0, 0)
         finir(p, GRIS_EOL)
         bpy.ops.object.transform_apply(location=True)
@@ -277,39 +309,77 @@ def eolienne():
 #  PANNEAU SOLAIRE
 # ---------------------------------------------------------------------------
 BLEU_VIF = matiere("Bleu_Vif", (0.01, 0.06, 0.80), metal=0.0, rugo=0.5, studs=False)
-LAVANDE = matiere("Lavande", (0.80, 0.80, 1.0), metal=0.2, rugo=0.4)
+LAVANDE = matiere("Lavande", (0.80, 0.80, 1.0), metal=0.2, rugo=0.4, studs=False)
+ACIER = matiere("Acier_Fonce", (0.30, 0.32, 0.38), metal=0.2, rugo=0.6)
 
 
-ACIER = matiere("Acier_Fonce", (0.33, 0.35, 0.40), metal=0.5, rugo=0.45)
+def tube(points, rayons, mat, nom, cotes=8, alea=0.0, graine=0):
+    """Tube qui suit une ligne de points (rayon different a chaque point), bords un peu irreguliers."""
+    rng = np.random.default_rng(graine)
+    pts = [Vector(p) for p in points]
+    bm = bmesh.new()
+    anneaux = []
+    for i, (p, r) in enumerate(zip(pts, rayons)):
+        tg = (pts[min(i + 1, len(pts) - 1)] - pts[max(i - 1, 0)]).normalized()
+        haut = Vector((1, 0, 0)) if abs(tg.z) < 0.9 else Vector((0, 1, 0))
+        u = tg.cross(haut).normalized()
+        v = tg.cross(u).normalized()
+        anneau = []
+        for k in range(cotes):
+            ang = 2 * math.pi * (k + 0.5) / cotes
+            rr = r * (1 + rng.uniform(-alea, alea))
+            anneau.append(bm.verts.new(p + (u * math.cos(ang) + v * math.sin(ang)) * rr))
+        anneaux.append(anneau)
+    for i in range(len(anneaux) - 1):
+        for k in range(cotes):
+            bm.faces.new((anneaux[i][k], anneaux[i][(k + 1) % cotes],
+                          anneaux[i + 1][(k + 1) % cotes], anneaux[i + 1][k]))
+    bm.faces.new(list(reversed(anneaux[0])))
+    bm.faces.new(anneaux[-1])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new(nom)
+    bm.to_mesh(me)
+    bm.free()
+    o = bpy.data.objects.new(nom, me)
+    bpy.context.scene.collection.objects.link(o)
+    me.materials.append(mat)
+    return o
+
+
+Z_PANNEAU = 3.7
 
 
 def panneau_solaire():
     pied = []
-    # socle octogonal evase + colonne + tete qui s'elargit
-    pied.append(cylindre(1.25, 0.85, 0.35, (0, 0, 0.175), ACIER, cotes=8))
-    pied.append(cylindre(0.85, 0.30, 0.45, (0, 0, 0.575), ACIER, cotes=8))
-    pied.append(cylindre(0.24, 0.18, 1.9, (0, 0, 1.75), ACIER, cotes=8))
-    pied.append(cylindre(0.18, 0.42, 0.45, (0, 0, 2.9), ACIER, cotes=8))
-    pied.append(boite((0.9, 0.9, 0.15), (0, 0, 3.15), ACIER))
+    # base large et irreguliere, puis un tronc qui monte en se courbant (comme un arbre)
+    pied.append(tube([(0, 0, 0), (0, 0, 0.3), (0, 0, 0.6), (0, 0, 0.95), (0.05, 0, 1.3)],
+                     [1.35, 1.3, 1.0, 0.62, 0.45], ACIER, "Base", cotes=10, alea=0.12, graine=3))
+    pied.append(tube([(0.05, 0, 1.2), (0.25, 0.05, 2.0), (0.5, 0.1, 2.7), (0.45, 0.05, Z_PANNEAU - 0.35)],
+                     [0.45, 0.34, 0.27, 0.25], ACIER, "Tronc", cotes=8, alea=0.06, graine=4))
+    # deux bras fins qui partent du tronc vers les bouts du panneau
+    pied.append(tube([(0.3, 0.05, 2.2), (-0.8, 0.0, 2.9), (-1.9, 0.0, Z_PANNEAU - 0.1)],
+                     [0.11, 0.09, 0.07], ACIER, "Bras1", cotes=6))
+    pied.append(tube([(0.45, 0.08, 2.4), (1.5, 0.0, 3.1), (2.6, 0.0, Z_PANNEAU - 0.1)],
+                     [0.11, 0.09, 0.07], ACIER, "Bras2", cotes=6))
+    pied.append(boite((0.5, 0.5, 0.15), (0.45, 0, Z_PANNEAU - 0.4), ACIER))
 
-    # plaque presque a plat (face vers le haut), 2 moities de 4 x 2 cellules
-    L, P, EP, joint = 4.4, 4.4, 0.14, 0.06
+    # plaque longue : 8 x 4 cellules en 2 moities, inclinee sur son grand cote
+    L, P, EP, joint, milieu = 6.4, 3.4, 0.12, 0.05, 0.12
     pan = [boite((L, P, EP), (0, 0, 0), LAVANDE)]
-    cols = 4
-    # moitie basse : 4 rangees, moitie haute : 3 rangees (comme dans le jeu)
-    for moitie, lignes in ((0, 4), (1, 3)):
-        y0 = -P / 2 if moitie == 0 else 0.0
-        pm = P / 2
-        lc = (L - (cols + 1) * joint) / cols
-        pc = (pm - (lignes + 1) * joint) / lignes
+    cols, lignes = 4, 4
+    for moitie in (0, 1):
+        x0 = -L / 2 if moitie == 0 else milieu / 2
+        lm = L / 2 - milieu / 2
+        lc = (lm - (cols + 0.5) * joint) / cols
+        pc = (P - (lignes + 1) * joint) / lignes
         for c in range(cols):
             for l in range(lignes):
-                x = -L / 2 + joint + lc / 2 + c * (lc + joint)
-                y = y0 + joint + pc / 2 + l * (pc + joint)
+                x = x0 + (joint if moitie == 0 else joint / 2) + lc / 2 + c * (lc + joint)
+                y = -P / 2 + joint + pc / 2 + l * (pc + joint)
                 pan.append(boite((lc, pc, 0.04), (x, y, EP / 2 + 0.005), BLEU_VIF))
     plaque = fusion(pan, "Plaque")
-    plaque.rotation_euler = (math.radians(25), 0, 0)   # incline vers -Y
-    plaque.location = (0, 0, 3.6)
+    plaque.rotation_euler = (math.radians(35), 0, 0)   # incline vers -Y
+    plaque.location = (0.4, 0, Z_PANNEAU)
     bpy.ops.object.select_all(action='DESELECT')
     plaque.select_set(True)
     bpy.context.view_layer.objects.active = plaque
@@ -377,10 +447,10 @@ def apercu(objs, chemin):
     w = bpy.data.worlds.new("Ciel")
     w.use_nodes = True
     w.node_tree.nodes["Background"].inputs["Color"].default_value = (0.85, 0.88, 0.92, 1)
-    w.node_tree.nodes["Background"].inputs["Strength"].default_value = 0.8
+    w.node_tree.nodes["Background"].inputs["Strength"].default_value = 0.55
     sc.world = w
     bpy.ops.object.light_add(type='SUN', rotation=(math.radians(40), math.radians(15), math.radians(-30)))
-    bpy.context.active_object.data.energy = 2.5
+    bpy.context.active_object.data.energy = 3.0
 
     bpy.ops.object.camera_add(location=(26, -24, 7))
     cam = bpy.context.active_object
@@ -415,7 +485,6 @@ def vue(objs, chemin, places, cam_pos, cible, lens):
             c.name = "Vue_" + o.name
             sc.collection.objects.link(c)
             c.location = places[o.name]
-            c.rotation_euler = (0, 0, math.radians(-50))
             c.hide_render = False
     cam = sc.camera
     cam.location = cam_pos
@@ -452,19 +521,17 @@ def main():
             d = os.path.dirname(APERCU)
             # meme angle que les captures du jeu (pour comparer)
             vue(objs, os.path.join(d, "vue_eolienne.png"),
-                {"Eolienne_Mat": (0, 0, 0)}, (11, -11, 13), (0, 0, 8), 28)
+                {"Eolienne_Mat": (0, 0, 0)}, (9, -9, 15.5), (1.0, 0, 11.0), 30)
             rotor = bpy.data.objects["Eolienne_Rotor"]
             c = rotor.copy(); c.data = rotor.data.copy(); c.name = "Vue_Rotor"
             bpy.context.scene.collection.objects.link(c)
-            m = Matrix.Rotation(math.radians(-50), 4, 'Z')
-            c.location = m @ Vector((X_MOYEU, 0, Z_NACELLE))
-            c.rotation_euler = (0, 0, math.radians(-50))
+            c.location = (X_MOYEU, 0, Z_NACELLE)
             c.hide_render = False
             bpy.context.scene.render.filepath = os.path.join(d, "vue_eolienne.png")
             bpy.ops.render.render(write_still=True)
             bpy.data.objects.remove(c, do_unlink=True)
             vue(objs, os.path.join(d, "vue_solaire.png"),
-                {"Panneau_Solaire": (0, 0, 0)}, (0, -9, 4.5), (0, 0, 2.6), 35)
+                {"Panneau_Solaire": (0, 0, 0)}, (-8, -6, 6), (0.5, 0, 2.6), 35)
 
 
 main()

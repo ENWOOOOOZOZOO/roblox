@@ -36,7 +36,7 @@ batiment_def := class<concrete>:
     ModeleRotor : creative_prop_asset = DefaultCreativePropAsset
     # position du moyeu par rapport au pied du batiment (en cm)
     @editable
-    DecalageRotor : vector3 = vector3{X := 75.0, Y := 0.0, Z := 1395.0}
+    DecalageRotor : vector3 = vector3{X := 265.0, Y := 0.0, Z := 1310.0}
     # secondes pour faire un tour complet
     @editable
     DureeTour : float = 4.0
