@@ -9,15 +9,31 @@ Chaque batiment tient sur 1 case de 5 m (512 cm). Le pivot de chaque mesh est au
                        A placer a X = +75 cm, Z = +1395 cm par rapport a Eolienne_Mat.
   Panneau_Solaire    : pied + panneau incline. Pivot au sol, au centre.
   Plante_Bio         : petite centrale biomasse (batiment, silo, cheminee, cuve). Pivot au sol.
+  Case_Sol           : dalle d'herbe de 512 x 512 cm (une case de la grille), dessus a Z = 0.
+Texture "studs" (facon Roblox) sur le sol : 1 case = 6 studs. Les batiments sont lisses comme dans
+le jeu Roblox (STUDS_SUR_BATIMENTS = True pour leur mettre aussi les studs). Les textures sont dans
+les .fbx (et aussi en .png dans le dossier "textures").
 Dans UEFN : importe les .fbx, puis Collision Complexity = "Use Complex Collision As Simple".
 """
 import bpy
+import bmesh
 import math
 import os
+import numpy as np
 from mathutils import Vector, Matrix
 
 SORTIE = os.environ.get("POWERACITY_SORTIE", os.path.join(os.path.expanduser("~"), "poweracity_modeles"))
 APERCU = os.environ.get("POWERACITY_APERCU", "")   # chemin d'une image d'apercu (optionnel)
+TEXTURES = os.path.join(SORTIE, "textures")
+
+# Texture "studs" facon Roblox : 1 case de la grille (512 cm) = 6 studs, donc 1 stud = 85 cm
+# (meme taille par rapport aux batiments que dans le jeu Roblox).
+STUD = 5.12 / 6
+STUDS_PAR_TEXTURE = 2         # la texture des batiments couvre 2 x 2 studs
+PX_STUD = 128                 # resolution : pixels par stud
+# Dans le jeu Roblox, seul le sol a des studs : l'eolienne et le panneau sont lisses.
+# Mets True pour mettre aussi les studs sur les batiments.
+STUDS_SUR_BATIMENTS = os.environ.get("POWERACITY_STUDS_BATIMENTS", "") == "1"
 
 # ---------------------------------------------------------------------------
 #  OUTILS
@@ -25,13 +41,71 @@ APERCU = os.environ.get("POWERACITY_APERCU", "")   # chemin d'une image d'apercu
 MATS = {}
 
 
-def matiere(nom, couleur, metal=0.0, rugo=0.6, emission=0.0):
+def motif_studs(n, px, aleatoire=False):
+    """Facteur de luminosite (n*px x n*px) : un sillon autour de chaque stud + un plot rond en relief,
+    eclaire d'en haut a gauche (ombre et reflet dessines dans la couleur, comme les studs Roblox)."""
+    t = (np.arange(px) + 0.5) / px
+    x, y = np.meshgrid(t, t)
+    bord = np.minimum(np.minimum(x, 1 - x), np.minimum(y, 1 - y))
+    sillon = np.clip(bord / 0.035, 0, 1)
+    r = np.hypot(x - 0.5, y - 0.5)
+    plot = 1 - np.clip((r - 0.29) / 0.035 + 0.5, 0, 1)
+    h = plot * 1.0 - (1 - sillon) * 0.7
+    gy, gx = np.gradient(h)
+    k = px / 12.0
+    nrm = np.dstack((-gx * k, -gy * k, np.ones_like(h)))
+    nrm /= np.linalg.norm(nrm, axis=2, keepdims=True)
+    lum = np.array([-1.0, -1.0, 1.4])
+    lum /= np.linalg.norm(lum)
+    ombre = (nrm @ lum) / lum[2]
+    f = np.clip(1 + 0.35 * (ombre - 1), 0.6, 1.3)
+    f *= 0.90 + 0.10 * sillon            # sillon un peu plus sombre
+    f *= 1 + 0.03 * plot                 # dessus du plot legerement plus clair
+    tuile = np.tile(f, (n, n))
+    if aleatoire:
+        # herbe Roblox : certains studs plus fonces, au hasard (motif fixe, qui se repete sans couture)
+        rng = np.random.default_rng(7)
+        teinte = rng.choice([1.0, 1.0, 1.0, 0.9, 0.8], size=(n, n))
+        tuile *= np.kron(teinte, np.ones((px, px)))
+    return tuile
+
+
+def vers_srgb(c):
+    c = np.clip(c, 0, 1)
+    return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1 / 2.4) - 0.055)
+
+
+def texture_studs(nom, couleur, n=STUDS_PAR_TEXTURE, px=PX_STUD, aleatoire=False):
+    f = motif_studs(n, px, aleatoire)
+    rgb = np.dstack([vers_srgb(couleur[i] * f) for i in range(3)])
+    rgba = np.dstack((rgb, np.ones_like(f)))
+    taille = n * px
+    img = bpy.data.images.new("T_" + nom, taille, taille, alpha=False)
+    img.pixels.foreach_set(rgba[::-1].astype(np.float32).ravel())
+    os.makedirs(TEXTURES, exist_ok=True)
+    img.filepath_raw = os.path.join(TEXTURES, "T_" + nom + ".png")
+    img.file_format = 'PNG'
+    img.save()
+    return img
+
+
+def matiere(nom, couleur, metal=0.0, rugo=0.6, emission=0.0, studs=None, n=STUDS_PAR_TEXTURE,
+            aleatoire=False):
     if nom in MATS:
         return MATS[nom]
+    if studs is None:
+        studs = STUDS_SUR_BATIMENTS
     m = bpy.data.materials.new(nom)
     m.use_nodes = True
-    b = m.node_tree.nodes["Principled BSDF"]
+    nt = m.node_tree
+    b = nt.nodes["Principled BSDF"]
     b.inputs["Base Color"].default_value = (*couleur, 1.0)
+    m["studs"] = n if studs else 0          # taille de la texture en studs (pour les UV)
+    if studs:
+        tex = nt.nodes.new("ShaderNodeTexImage")
+        tex.image = texture_studs(nom, couleur, n, PX_STUD, aleatoire)
+        tex.interpolation = 'Linear'
+        nt.links.new(tex.outputs["Color"], b.inputs["Base Color"])
     b.inputs["Metallic"].default_value = metal
     b.inputs["Roughness"].default_value = rugo
     if emission:
@@ -72,6 +146,29 @@ def sphere(r, pos, mat, ech=(1, 1, 1)):
     return finir(o, mat)
 
 
+def uv_monde(o):
+    """UV calculees a partir de la position dans le monde (projection par face), pour que les studs
+    gardent la meme taille partout et tombent pile sur la grille de 512 cm."""
+    bm = bmesh.new()
+    bm.from_mesh(o.data)
+    uv = bm.loops.layers.uv.verify()
+    for f in bm.faces:
+        mat = o.data.materials[f.material_index] if o.data.materials else None
+        n_studs = (mat.get("studs", 0) if mat else 0) or STUDS_PAR_TEXTURE
+        ech = 1.0 / (n_studs * STUD)
+        nx, ny, nz = (abs(c) for c in f.normal)
+        for l in f.loops:
+            co = l.vert.co
+            if nz >= nx and nz >= ny:
+                l[uv].uv = (co.x * ech, co.y * ech)
+            elif nx >= ny:
+                l[uv].uv = (co.y * ech, co.z * ech)
+            else:
+                l[uv].uv = (co.x * ech, co.z * ech)
+    bm.to_mesh(o.data)
+    bm.free()
+
+
 def fusion(objs, nom):
     bpy.ops.object.select_all(action='DESELECT')
     for o in objs:
@@ -84,6 +181,7 @@ def fusion(objs, nom):
     # pivot au point (0, 0, 0) du monde
     bpy.context.scene.cursor.location = (0, 0, 0)
     bpy.ops.object.origin_set(type='ORIGIN_CURSOR')
+    uv_monde(o)
     return o
 
 
@@ -92,18 +190,16 @@ bpy.ops.wm.read_factory_settings(use_empty=True)
 # ---------------------------------------------------------------------------
 #  COULEURS (facon Roblox : couleurs franches, peu de details)
 # ---------------------------------------------------------------------------
-GRIS_CLAIR = matiere("Gris_Clair", (0.72, 0.75, 0.80), rugo=0.5)
 GRIS_MAT = matiere("Gris_Mat", (0.58, 0.62, 0.68), metal=0.2, rugo=0.45)
 GRIS_FONCE = matiere("Gris_Fonce", (0.20, 0.22, 0.26), rugo=0.7)
-BLANC = matiere("Blanc", (0.90, 0.91, 0.94), rugo=0.4)
-BLEU_CELL = matiere("Bleu_Cellule", (0.03, 0.10, 0.75), metal=0.3, rugo=0.25)
-CADRE = matiere("Cadre_Panneau", (0.78, 0.80, 0.95), metal=0.4, rugo=0.35)
 BETON = matiere("Beton", (0.55, 0.55, 0.58), rugo=0.9)
 MUR_BIO = matiere("Mur_Bio", (0.38, 0.38, 0.44), rugo=0.8)
 TOIT_BIO = matiere("Toit_Bio", (0.25, 0.25, 0.30), rugo=0.8)
 VERT_BIO = matiere("Vert_Bio", (0.15, 0.55, 0.20), rugo=0.5)
 ORANGE = matiere("Orange_Porte", (0.85, 0.40, 0.10), rugo=0.6)
-VERT_LUM = matiere("Vert_Lumiere", (0.30, 1.0, 0.30), emission=3.0)
+VERT_LUM = matiere("Vert_Lumiere", (0.30, 1.0, 0.30), emission=3.0, studs=False)
+# sol des cases : herbe Roblox avec studs, 1 texture = 1 case de 512 cm (6 x 6 studs)
+SOL = matiere("Sol_Herbe", (0.20, 0.72, 0.03), rugo=0.9, studs=True, n=6, aleatoire=True)
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +276,7 @@ def eolienne():
 # ---------------------------------------------------------------------------
 #  PANNEAU SOLAIRE
 # ---------------------------------------------------------------------------
-BLEU_VIF = matiere("Bleu_Vif", (0.01, 0.06, 0.80), metal=0.0, rugo=0.5)
+BLEU_VIF = matiere("Bleu_Vif", (0.01, 0.06, 0.80), metal=0.0, rugo=0.5, studs=False)
 LAVANDE = matiere("Lavande", (0.80, 0.80, 1.0), metal=0.2, rugo=0.4)
 
 
@@ -250,13 +346,21 @@ def plante_bio():
 
 
 # ---------------------------------------------------------------------------
+#  CASE DE SOL (dalle de 512 x 512 cm pour la grille 6x6)
+# ---------------------------------------------------------------------------
+def case_sol():
+    d = boite((5.12, 5.12, 0.2), (0, 0, -0.1), SOL)   # le dessus est a Z = 0
+    return fusion([d], "Case_Sol")
+
+
+# ---------------------------------------------------------------------------
 #  APERCU (rendu des 3 batiments cote a cote)
 # ---------------------------------------------------------------------------
 def apercu(objs, chemin):
     sc = bpy.context.scene
     # copies temporaires placees cote a cote (les originaux restent a (0, 0, 0) pour l'export)
     places = {"Eolienne_Mat": (0, 0, 0), "Eolienne_Rotor": (X_MOYEU, 0, Z_NACELLE),
-              "Panneau_Solaire": (3, 8, 0), "Plante_Bio": (-6, -7, 0)}
+              "Panneau_Solaire": (3, 8, 0), "Plante_Bio": (-6, -7, 0), "Case_Sol": (0, 0, -5)}
     copies = []
     for o in objs:
         c = o.copy()
@@ -265,9 +369,10 @@ def apercu(objs, chemin):
         c.location = places[o.name]
         copies.append(c)
         o.hide_render = True
-    sol_mat = matiere("Herbe", (0.12, 0.45, 0.03), rugo=0.9)
-    bpy.ops.mesh.primitive_plane_add(size=60, location=(0, 0, 0))
-    finir(bpy.context.active_object, sol_mat)
+    bpy.ops.mesh.primitive_plane_add(size=5.12 * 12, location=(0, 0, 0))
+    sol = finir(bpy.context.active_object, SOL)
+    sol.name = "Plane_Sol"
+    uv_monde(sol)
 
     w = bpy.data.worlds.new("Ciel")
     w.use_nodes = True
@@ -325,7 +430,8 @@ def main():
     mat, rotor = eolienne()
     solaire = panneau_solaire()
     bio = plante_bio()
-    objs = [mat, rotor, solaire, bio]
+    sol = case_sol()
+    objs = [mat, rotor, solaire, bio, sol]
 
     os.makedirs(SORTIE, exist_ok=True)
     for o in objs:
@@ -335,7 +441,8 @@ def main():
         o.select_set(True)
         bpy.context.view_layer.objects.active = o
         bpy.ops.export_scene.fbx(filepath=os.path.join(SORTIE, o.name + ".fbx"), use_selection=True,
-                                 object_types={'MESH'}, mesh_smooth_type='FACE')
+                                 object_types={'MESH'}, mesh_smooth_type='FACE',
+                                 path_mode='COPY', embed_textures=True)
         bpy.ops.export_scene.gltf(filepath=os.path.join(SORTIE, o.name + ".glb"), use_selection=True,
                                   export_format='GLB')
     print("Export OK :", SORTIE)

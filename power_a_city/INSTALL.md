@@ -17,9 +17,12 @@ Limites de cette premiere version : pas d'apercu fantome (Verse n'a pas de rayon
 vise la case et on interagit avec son bouton), pas de HUD (les infos sortent en Print),
 pas encore de marteau/retrait, ni de sauvegarde.
 
-## Modeles 3D (eolienne, panneau solaire, plante bio)
+## Modeles 3D (eolienne, panneau solaire, plante bio, case de sol)
 
-Les .fbx sont dans `modeles/` (ou relance `batiments.py` dans Blender).
+Les .fbx sont dans `modeles/` (ou relance `batiments.py` dans Blender). Les textures sont incluses
+dans les .fbx (et aussi en .png dans `modeles/textures/`).
+`Case_Sol` = une dalle d'herbe a studs de 512 x 512 cm (une case de la grille, 6 x 6 studs) :
+pose-en 36 cote a cote pour faire la grille 6x6, avec le dessus a la hauteur du sol.
 1. Dans UEFN, Content Browser > Import > choisis les 4 .fbx. Pour chacun : Collision Complexity =
    "Use Complex Collision As Simple".
 2. Clic droit sur chaque mesh > Create Blueprint Class (parent : creative_prop) pour obtenir un
