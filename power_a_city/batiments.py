@@ -139,13 +139,22 @@ def texture(nom, couleur, f):
     return img
 
 
-def texture_damier(nom, c1, c2, n, px):
-    """Damier a 2 couleurs (cheminee rouge et blanche)."""
+def masque_2c(genre, n, px):
+    """Masque 0/1 pour une texture a 2 couleurs.
+    damier   : cases alternees (cheminee rouge et blanche)
+    fenetres : facade d'immeuble, 1 etage en hauteur et 3 fenetres en largeur par motif"""
     u, v = coord(px * n)
-    case = ((np.floor(u * n) + np.floor(v * n)) % 2)
-    rgb = np.dstack([vers_srgb(c1[i] * case + c2[i] * (1 - case)) for i in range(3)])
+    if genre == "damier":
+        return (np.floor(u * n) + np.floor(v * n)) % 2
+    fu, fv = (u * n * 3) % 1.0, (v * n) % 1.0
+    return ((fu > 0.22) & (fu < 0.78) & (fv > 0.36) & (fv < 0.8)).astype(float)
+
+
+def texture_2c(nom, c1, c0, case, facteur=1.0):
+    """Texture a 2 couleurs : c1 la ou le masque vaut 1, c0 ailleurs (facteur = motif de studs par-dessus)."""
+    rgb = np.dstack([vers_srgb((c1[i] * case + c0[i] * (1 - case)) * facteur) for i in range(3)])
     rgba = np.dstack((rgb, np.ones_like(case)))
-    img = bpy.data.images.new("T_" + nom, px * n, px * n, alpha=False)
+    img = bpy.data.images.new("T_" + nom, case.shape[1], case.shape[0], alpha=False)
     img.pixels.foreach_set(rgba.astype(np.float32).ravel())
     os.makedirs(TEXTURES, exist_ok=True)
     img.filepath_raw = os.path.join(TEXTURES, "T_" + nom + ".png")
@@ -174,23 +183,37 @@ def matiere(nom, couleur, metal=0.0, rugo=0.6, emission=0.0, studs=None, motif_t
     m["couleur"], m["couleur2"], m["emission"] = couleur, couleur2 or couleur, emission
     if motif_tex:
         tex = nt.nodes.new("ShaderNodeTexImage")
-        if motif_tex == "damier":
-            tex.image = texture_damier(nom, couleur, couleur2, n, 64)
-            tex.interpolation = 'Closest'
+        if motif_tex in ("damier", "fenetres"):
+            msk = masque_2c(motif_tex, n, 64)
+            if motif_tex == "damier":
+                tex.image = texture_2c(nom, couleur, couleur2, msk)
+                tex.interpolation = 'Closest'
+            else:
+                # facade : vitres = couleur2, mur = couleur, avec nos studs par-dessus (4 studs par etage)
+                msk = masque_2c("fenetres", n, 256)
+                fac = np.tile(tuile_stud(64), (4 * n, 4 * n)) if STUDS_SUR_BATIMENTS else 1.0
+                tex.image = texture_2c(nom, couleur2, couleur, msk, fac)
+                tex.interpolation = 'Linear'
         else:
             tex.image = texture(nom, couleur, motif(motif_tex, n, PX_STUD, aleatoire, remplis))
-        if motif_tex != "damier":
             tex.interpolation = 'Linear'
         nt.links.new(tex.outputs["Color"], b.inputs["Base Color"])
     b.inputs["Metallic"].default_value = metal
     b.inputs["Roughness"].default_value = rugo
     if emission:
-        b.inputs["Emission Color"].default_value = (*couleur, 1.0)
+        b.inputs["Emission Color"].default_value = (*(couleur2 if motif_tex == "fenetres" else couleur), 1.0)
         b.inputs["Emission Strength"].default_value = emission
         # petite texture unie branchee sur l'emission : a l'import, UEFN la met dans Emissive Color
-        img = bpy.data.images.new("T_" + nom + "_Emission", 4, 4, alpha=False)
-        pix = np.array([*vers_srgb(np.array(couleur)), 1.0], dtype=np.float32)
-        img.pixels.foreach_set(np.tile(pix, 16))
+        if motif_tex == "fenetres":
+            # seules les vitres brillent
+            msk = masque_2c("fenetres", n, 256)
+            lum = np.dstack([vers_srgb(couleur2[i] * msk) for i in range(3)] + [np.ones_like(msk)])
+            img = bpy.data.images.new("T_" + nom + "_Emission", msk.shape[1], msk.shape[0], alpha=False)
+            img.pixels.foreach_set(lum.astype(np.float32).ravel())
+        else:
+            img = bpy.data.images.new("T_" + nom + "_Emission", 4, 4, alpha=False)
+            pix = np.array([*vers_srgb(np.array(couleur)), 1.0], dtype=np.float32)
+            img.pixels.foreach_set(np.tile(pix, 16))
         os.makedirs(TEXTURES, exist_ok=True)
         img.filepath_raw = os.path.join(TEXTURES, "T_" + nom + "_Emission.png")
         img.file_format = 'PNG'
@@ -1620,9 +1643,8 @@ def ecrire_materiau_maitre(objs):
         if motif_tex:
             cle = (motif_tex, int(m["n"]), float(m["remplis"]), bool(m["aleatoire"]))
             if cle not in masques:
-                if motif_tex == "damier":
-                    u, v = coord(64 * cle[1])
-                    f = ((np.floor(u * cle[1]) + np.floor(v * cle[1])) % 2)
+                if motif_tex in ("damier", "fenetres"):
+                    f = masque_2c(motif_tex, cle[1], 64)
                 else:
                     f = motif(motif_tex, cle[1], PX_STUD, cle[3], cle[2])
                 intens = float(f.max())
@@ -1749,4 +1771,5 @@ def main():
                 {"Plante_Bio": (0, 0, 0)}, (0.5, -9, 3.0), (0, 0, 2.6), 35)
 
 
-main()
+if __name__ == "__main__":
+    main()

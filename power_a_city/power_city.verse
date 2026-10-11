@@ -64,8 +64,12 @@ parcelle := class<concrete>:
     Spawner : player_spawner_device = player_spawner_device{}
     @editable
     BoutonAgrandir : button_device = button_device{}
+    # prop invisible pose au centre de l'endroit ou la ville de ce joueur apparait (40 x 32 m)
+    @editable
+    RepereVille : creative_prop = creative_prop{}
 
     var Proprietaire : ?agent = false
+    var VilleActuelle : ?creative_prop = false
     var Taille : int = 6
     var Occupees : []logic = array{}
 
@@ -93,6 +97,9 @@ power_city := class(creative_device):
     # boutons de test : le bouton N choisit le batiment N (la Boutique appellera ChoisirBatiment)
     @editable
     BoutonsChoix : []button_device = array{}
+    # les 10 villes, de la plus simple a la plus futuriste (Ville_01 ... Ville_10)
+    @editable
+    Villes : []creative_prop_asset = array{}
 
     var Donnees : [agent]joueur_data = map{}
     # envoye a chaque batiment pose (le batiment + sa position) : fumee.verse l'ecoute
@@ -127,7 +134,19 @@ power_city := class(creative_device):
         if (not P.Proprietaire?):
             set P.Proprietaire = option{Agent}
             DonneesDe(Agent)
+            ChangerVille(P, 1)
             Print("Parcelle assignee")
+
+    # remplace la ville de la parcelle par celle du niveau demande (la 10e reste au-dela du niveau 10)
+    ChangerVille(P : parcelle, Niveau : int) : void =
+        if (Ancienne := P.VilleActuelle?):
+            Ancienne.Dispose()
+            set P.VilleActuelle = false
+        Index := Min(Niveau - 1, Villes.Length - 1)
+        if (Modele := Villes[Index]):
+            T := P.RepereVille.GetTransform()
+            Resultat := SpawnProp(Modele, T.Translation, T.Rotation)
+            set P.VilleActuelle = Resultat(0)
 
     # a appeler depuis la Boutique quand un joueur choisit un batiment
     ChoisirBatiment(Agent : agent, Index : int) : void =
@@ -220,3 +239,5 @@ power_city := class(creative_device):
                     set D.Niveau += 1
                     set D.Demande += 15
                     Print("Ville niveau {D.Niveau} ! Nouvelle demande : {D.Demande}")
+                    for (P : Parcelles, Proprio := P.Proprietaire?, Proprio = Agent):
+                        ChangerVille(P, D.Niveau)

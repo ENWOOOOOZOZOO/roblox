@@ -111,3 +111,25 @@ materiau : sa couleur, son masque, son intensite, son emission).
 2. Pour chaque ligne de `materiaux.csv`, cree une Material Instance de M_PowerCity avec la couleur,
    le masque, l'intensite et l'emission du tableau, et remplace le materiau du meme nom sur les meshes.
 3. Changer une couleur = changer un parametre de l'instance, sans repasser par Blender.
+
+## Les 10 villes (une par niveau de ville)
+
+Les .fbx sont dans `villes/` (ou relance `villes.py` dans Blender, dans le meme dossier que
+batiments.py). Apercu : `les_10_villes.png`.
+
+| Niveau | Fichier  | Ville           | Niveau | Fichier  | Ville            |
+|--------|----------|-----------------|--------|----------|------------------|
+| 1      | Ville_01 | Village         | 6      | Ville_06 | Metropole        |
+| 2      | Ville_02 | Bourg           | 7      | Ville_07 | Eco-ville        |
+| 3      | Ville_03 | Petite ville    | 8      | Ville_08 | Ville futuriste  |
+| 4      | Ville_04 | Ville           | 9      | Ville_09 | Cite neon        |
+| 5      | Ville_05 | Grande ville    | 10     | Ville_10 | Cite celeste     |
+
+Chaque ville fait 40 x 32 m, pivot au centre au sol. Elles ont toutes la meme emprise.
+1. Importe les 10 .fbx (les collisions UCX_ sont dedans, comme pour les batiments). Ce qui flotte
+   (plateformes et anneaux de la cite celeste, voitures volantes de la cite neon) n'a pas de collision.
+2. Create Blueprint Class (parent creative_prop) pour chacune.
+3. Pour chaque parcelle : pose un prop invisible a l'endroit de la ville du joueur et mets-le dans
+   `RepereVille`. Dans `power_city` > Villes, mets les 10 villes dans l'ordre.
+4. Quand un joueur prend une parcelle, le Village apparait. A chaque niveau de ville, l'ancienne
+   ville disparait et la suivante apparait au meme endroit.
