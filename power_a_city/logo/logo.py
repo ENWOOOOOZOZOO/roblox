@@ -1,0 +1,111 @@
+"""Logo de Power Tycoon (style cartoon, facon Roblox). python3 logo.py <police.ttf> <sortie.png>"""
+import sys
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+
+POLICE, SORTIE = sys.argv[1], sys.argv[2]
+L, H = 1600, 800
+NAVY = (22, 30, 70)
+img = Image.new("RGBA", (L, H), (0, 0, 0, 0))
+
+
+def degrade(taille, haut, bas):
+    g = Image.new("RGBA", taille)
+    d = ImageDraw.Draw(g)
+    for y in range(taille[1]):
+        t = y / max(1, taille[1] - 1)
+        d.line([(0, y), (taille[0], y)], fill=tuple(int(haut[i] + (bas[i] - haut[i]) * t) for i in range(3)) + (255,))
+    return g
+
+
+def texte(txt, cx, cy, taille, haut, bas, rot=0):
+    f = ImageFont.truetype(POLICE, taille)
+    calque = Image.new("RGBA", (L, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(calque)
+    box = d.textbbox((0, 0), txt, font=f)
+    x, y = cx - (box[2] - box[0]) / 2 - box[0], cy - (box[3] - box[1]) / 2 - box[1]
+    d.text((x + 10, y + 16), txt, font=f, fill=NAVY, stroke_width=26, stroke_fill=NAVY)       # ombre
+    d.text((x, y), txt, font=f, fill=NAVY, stroke_width=26, stroke_fill=NAVY)                # contour fonce
+    d.text((x, y), txt, font=f, fill=(255, 255, 255), stroke_width=11, stroke_fill=(255, 255, 255))  # liseré blanc
+    masque = Image.new("L", (L, H), 0)
+    ImageDraw.Draw(masque).text((x, y), txt, font=f, fill=255)
+    bb = masque.getbbox()
+    g = degrade((bb[2] - bb[0], bb[3] - bb[1]), haut, bas)
+    calque.paste(g, (bb[0], bb[1]), masque.crop(bb))
+    # reflet brillant sur le haut des lettres
+    reflet = Image.new("L", (L, H), 0)
+    ImageDraw.Draw(reflet).rectangle((0, bb[1], L, bb[1] + (bb[3] - bb[1]) * 0.32), fill=90)
+    blanc = Image.new("RGBA", (L, H), (255, 255, 255, 255))
+    m2 = Image.composite(reflet, Image.new("L", (L, H), 0), masque)
+    calque = Image.composite(blanc, calque, m2.point(lambda v: v))
+    if rot:
+        calque = calque.rotate(rot, resample=Image.BICUBIC, center=(cx, cy))
+    img.alpha_composite(calque)
+
+
+def eclair(cx, cy, s, rot=0):
+    pts = [(0.15, -1.0), (0.75, -1.0), (0.35, -0.15), (0.8, -0.15), (-0.2, 1.1), (0.05, 0.15), (-0.4, 0.15)]
+    calque = Image.new("RGBA", (L, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(calque)
+    p = [(cx + x * s, cy + y * s) for x, y in pts]
+    d.polygon([(x + 6, y + 9) for x, y in p], fill=NAVY)
+    d.line(p + [p[0]], fill=NAVY, width=int(s * 0.28), joint="curve")
+    d.polygon(p, fill=(255, 214, 30))
+    d.polygon([(cx + x * s, cy + y * s) for x, y in [(0.2, -0.95), (0.62, -0.95), (0.35, -0.4), (0.12, -0.4)]], fill=(255, 245, 170))
+    if rot:
+        calque = calque.rotate(rot, resample=Image.BICUBIC, center=(cx, cy))
+    img.alpha_composite(calque)
+
+
+def immeuble(cx, base, w, h, corps, fenetre, rot):
+    """Immeuble cartoon avec un visage (yeux + sourire) et une antenne a lumiere rouge."""
+    calque = Image.new("RGBA", (L, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(calque)
+    x0, y0, x1, y1 = cx - w / 2, base - h, cx + w / 2, base
+    d.line([(cx + w * 0.2, y0), (cx + w * 0.2, y0 - 60)], fill=NAVY, width=14)
+    d.ellipse((cx + w * 0.2 - 17, y0 - 82, cx + w * 0.2 + 17, y0 - 48), fill=(240, 40, 40), outline=NAVY, width=7)
+    d.rounded_rectangle((x0 + 8, y0 + 12, x1 + 8, y1 + 12), 26, fill=NAVY)
+    d.rounded_rectangle((x0, y0, x1, y1), 26, fill=corps, outline=NAVY, width=12)
+    d.rounded_rectangle((x0 + 10, y0 + 10, x0 + w * 0.28, y1 - 10), 18, fill=tuple(min(255, c + 35) for c in corps))
+    cols, rangs = 3, int(h / 70)
+    fw, fh = w * 0.17, 34
+    for r in range(rangs):
+        for c in range(cols):
+            fx = x0 + w * 0.18 + c * w * 0.26
+            fy = y0 + 30 + r * 66
+            if fy + fh > y1 - 150 and r > 1:
+                continue
+            d.rounded_rectangle((fx, fy, fx + fw, fy + fh), 7, fill=fenetre, outline=NAVY, width=5)
+    # visage
+    ey = y1 - 120
+    for ex in (cx - w * 0.2, cx + w * 0.2):
+        d.ellipse((ex - 26, ey - 30, ex + 26, ey + 30), fill=(255, 255, 255), outline=NAVY, width=7)
+        d.ellipse((ex - 11, ey - 8, ex + 13, ey + 20), fill=NAVY)
+    d.arc((cx - 46, y1 - 105, cx + 46, y1 - 40), 15, 165, fill=NAVY, width=10)
+    calque = calque.rotate(rot, resample=Image.BICUBIC, center=(cx, base))
+    img.alpha_composite(calque)
+
+
+immeuble(190, 700, 230, 470, (88, 120, 235), (255, 236, 120), 8)
+immeuble(1410, 700, 230, 430, (90, 200, 90), (255, 200, 90), -8)
+texte("POWER", 800, 245, 290, (255, 226, 60), (255, 140, 0), rot=2)
+texte("TYCOON!", 800, 545, 270, (140, 235, 255), (20, 140, 240), rot=-2)
+eclair(395, 150, 95, rot=-12)
+eclair(1215, 135, 85, rot=14)
+img.save(SORTIE)
+
+# version miniature 1920 x 1080 sur fond de ciel et d'herbe a studs
+fond = Image.new("RGBA", (1920, 1080))
+d = ImageDraw.Draw(fond)
+for y in range(1080):
+    t = y / 1079
+    d.line([(0, y), (1920, y)], fill=(int(70 + 90 * t), int(170 + 60 * t), 255, 255))
+d.rectangle((0, 860, 1920, 1080), fill=(80, 210, 40, 255))
+for gx in range(0, 1920, 60):
+    for gy in range(870, 1080, 60):
+        d.rounded_rectangle((gx + 14, gy + 14, gx + 46, gy + 46), 9, outline=(60, 180, 30, 255), width=4)
+halo = Image.new("RGBA", (1920, 1080), (0, 0, 0, 0))
+ImageDraw.Draw(halo).ellipse((460, 120, 1460, 860), fill=(255, 250, 200, 150))
+fond.alpha_composite(halo.filter(ImageFilter.GaussianBlur(90)))
+logo = img.resize((1600, 800))
+fond.alpha_composite(logo, (160, 140))
+fond.convert("RGB").save(SORTIE.replace(".png", "_miniature_1920x1080.png"))
