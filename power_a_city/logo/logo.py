@@ -93,7 +93,19 @@ texte("TYCOON!", 800, 820, 260, (140, 235, 255), (20, 140, 240), rot=-2)
 eclair(395, 140, 95, rot=-12)
 eclair(1215, 125, 85, rot=14)
 img.save(SORTIE)
+grand = img
 
+# logo du Creator Portal : 1440 x 608, fond transparent, titre sur 2 lignes
+L, H = 1440, 608
+img = Image.new("RGBA", (L, H), (0, 0, 0, 0))
+immeuble(118, 590, 140, 330, (88, 120, 235), (255, 236, 120), 7)
+immeuble(1322, 590, 140, 305, (90, 200, 90), (255, 200, 90), -7)
+texte("POWER CITY", 720, 175, 205, (255, 226, 60), (255, 140, 0), rot=1)
+texte("TYCOON!", 720, 420, 215, (140, 235, 255), (20, 140, 240), rot=-1)
+eclair(230, 90, 62, rot=-12)
+eclair(1215, 80, 58, rot=14)
+img.save(SORTIE.replace(".png", "_1440x608.png"))
+img, L, H = grand, 1600, 1100
 
 
 def miniature(LF, HF, logo_l, chemin):
