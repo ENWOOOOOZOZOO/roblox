@@ -95,6 +95,15 @@ eclair(1215, 125, 85, rot=14)
 img.save(SORTIE)
 grand = img
 
+# meme decor sans le texte (pour les miniatures "sans texte")
+img = Image.new("RGBA", (L, H), (0, 0, 0, 0))
+immeuble(185, 1000, 230, 520, (88, 120, 235), (255, 236, 120), 8)
+immeuble(1415, 1000, 230, 480, (90, 200, 90), (255, 200, 90), -8)
+immeuble(800, 1000, 260, 640, (240, 150, 60), (255, 245, 170), 0)
+eclair(470, 300, 120, rot=-12)
+eclair(1130, 280, 110, rot=14)
+deco = img
+
 # logo du Creator Portal : 1440 x 608, fond transparent, titre sur 2 lignes
 L, H = 1440, 608
 img = Image.new("RGBA", (L, H), (0, 0, 0, 0))
@@ -108,8 +117,8 @@ img.save(SORTIE.replace(".png", "_1440x608.png"))
 img, L, H = grand, 1600, 1100
 
 
-def miniature(LF, HF, logo_l, chemin):
-    """Fond ciel + herbe a studs, logo au centre."""
+def miniature(LF, HF, logo_l, chemin, motif=None):
+    """Fond ciel + herbe a studs, logo (ou decor sans texte) au centre."""
     fond = Image.new("RGBA", (LF, HF))
     d = ImageDraw.Draw(fond)
     sol = int(HF * 0.82)
@@ -120,9 +129,9 @@ def miniature(LF, HF, logo_l, chemin):
     for gx in range(0, LF, 60):
         for gy in range(sol + 10, HF, 60):
             d.rounded_rectangle((gx + 14, gy + 14, gx + 46, gy + 46), 9, outline=(60, 180, 30, 255), width=4)
-    logo = img.resize((logo_l, int(logo_l * H / L)))
+    logo = (motif or img).resize((logo_l, int(logo_l * H / L)))
     x = (LF - logo.width) // 2
-    y = max(20, sol - logo.height + 40) if LF > HF else (sol - logo.height) // 2 + 60   # portrait : logo au milieu du ciel
+    y = max(20, sol - logo.height + 40) if (LF > HF or motif) else (sol - logo.height) // 2 + 60   # portrait : logo au milieu du ciel
     halo = Image.new("RGBA", (LF, HF), (0, 0, 0, 0))
     ImageDraw.Draw(halo).ellipse((x + logo.width * 0.15, y, x + logo.width * 0.85, y + logo.height), fill=(255, 250, 200, 150))
     fond.alpha_composite(halo.filter(ImageFilter.GaussianBlur(90)))
@@ -131,4 +140,6 @@ def miniature(LF, HF, logo_l, chemin):
 
 
 miniature(1920, 1080, 1360, SORTIE.replace(".png", "_miniature_1920x1080.png"))
-miniature(1080, 1920, 1040, SORTIE.replace(".png", "_portrait_1080x1920.png"))
+miniature(1920, 1080, 1360, SORTIE.replace(".png", "_miniature_1920x1080_sans_texte.png"), deco)
+miniature(1440, 1920, 1380, SORTIE.replace(".png", "_portrait_1440x1920.png"))
+miniature(1440, 1920, 1380, SORTIE.replace(".png", "_portrait_1440x1920_sans_texte.png"), deco)
