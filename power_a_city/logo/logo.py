@@ -1,9 +1,9 @@
-"""Logo de Power Tycoon (style cartoon, facon Roblox). python3 logo.py <police.ttf> <sortie.png>"""
+"""Logo de Power City Tycoon (style cartoon, facon Roblox). python3 logo.py <police.ttf> <sortie.png>"""
 import sys
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 POLICE, SORTIE = sys.argv[1], sys.argv[2]
-L, H = 1600, 800
+L, H = 1600, 1100
 NAVY = (22, 30, 70)
 img = Image.new("RGBA", (L, H), (0, 0, 0, 0))
 
@@ -85,27 +85,38 @@ def immeuble(cx, base, w, h, corps, fenetre, rot):
     img.alpha_composite(calque)
 
 
-immeuble(190, 700, 230, 470, (88, 120, 235), (255, 236, 120), 8)
-immeuble(1410, 700, 230, 430, (90, 200, 90), (255, 200, 90), -8)
-texte("POWER", 800, 245, 290, (255, 226, 60), (255, 140, 0), rot=2)
-texte("TYCOON!", 800, 545, 270, (140, 235, 255), (20, 140, 240), rot=-2)
-eclair(395, 150, 95, rot=-12)
-eclair(1215, 135, 85, rot=14)
+immeuble(185, 1000, 230, 520, (88, 120, 235), (255, 236, 120), 8)
+immeuble(1415, 1000, 230, 480, (90, 200, 90), (255, 200, 90), -8)
+texte("POWER", 800, 230, 280, (255, 226, 60), (255, 140, 0), rot=2)
+texte("CITY", 800, 520, 300, (255, 255, 255), (190, 205, 230), rot=-1)
+texte("TYCOON!", 800, 820, 260, (140, 235, 255), (20, 140, 240), rot=-2)
+eclair(395, 140, 95, rot=-12)
+eclair(1215, 125, 85, rot=14)
 img.save(SORTIE)
 
-# version miniature 1920 x 1080 sur fond de ciel et d'herbe a studs
-fond = Image.new("RGBA", (1920, 1080))
-d = ImageDraw.Draw(fond)
-for y in range(1080):
-    t = y / 1079
-    d.line([(0, y), (1920, y)], fill=(int(70 + 90 * t), int(170 + 60 * t), 255, 255))
-d.rectangle((0, 860, 1920, 1080), fill=(80, 210, 40, 255))
-for gx in range(0, 1920, 60):
-    for gy in range(870, 1080, 60):
-        d.rounded_rectangle((gx + 14, gy + 14, gx + 46, gy + 46), 9, outline=(60, 180, 30, 255), width=4)
-halo = Image.new("RGBA", (1920, 1080), (0, 0, 0, 0))
-ImageDraw.Draw(halo).ellipse((460, 120, 1460, 860), fill=(255, 250, 200, 150))
-fond.alpha_composite(halo.filter(ImageFilter.GaussianBlur(90)))
-logo = img.resize((1600, 800))
-fond.alpha_composite(logo, (160, 140))
-fond.convert("RGB").save(SORTIE.replace(".png", "_miniature_1920x1080.png"))
+
+
+def miniature(LF, HF, logo_l, chemin):
+    """Fond ciel + herbe a studs, logo au centre."""
+    fond = Image.new("RGBA", (LF, HF))
+    d = ImageDraw.Draw(fond)
+    sol = int(HF * 0.82)
+    for y in range(HF):
+        t = y / (HF - 1)
+        d.line([(0, y), (LF, y)], fill=(int(70 + 90 * t), int(170 + 60 * t), 255, 255))
+    d.rectangle((0, sol, LF, HF), fill=(80, 210, 40, 255))
+    for gx in range(0, LF, 60):
+        for gy in range(sol + 10, HF, 60):
+            d.rounded_rectangle((gx + 14, gy + 14, gx + 46, gy + 46), 9, outline=(60, 180, 30, 255), width=4)
+    logo = img.resize((logo_l, int(logo_l * H / L)))
+    x = (LF - logo.width) // 2
+    y = max(20, sol - logo.height + 40) if LF > HF else (sol - logo.height) // 2 + 60   # portrait : logo au milieu du ciel
+    halo = Image.new("RGBA", (LF, HF), (0, 0, 0, 0))
+    ImageDraw.Draw(halo).ellipse((x + logo.width * 0.15, y, x + logo.width * 0.85, y + logo.height), fill=(255, 250, 200, 150))
+    fond.alpha_composite(halo.filter(ImageFilter.GaussianBlur(90)))
+    fond.alpha_composite(logo, (x, y))
+    fond.convert("RGB").save(chemin)
+
+
+miniature(1920, 1080, 1360, SORTIE.replace(".png", "_miniature_1920x1080.png"))
+miniature(1080, 1920, 1040, SORTIE.replace(".png", "_portrait_1080x1920.png"))
